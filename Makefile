@@ -41,7 +41,10 @@ lint:
 
 check: syntax
 	ruby -Itest test/run.rb
-	bin/switchyard config validate --config /dev/null
+	@tmp="$$(mktemp)"; \
+	bin/switchyard config init --config "$$tmp" >/dev/null; \
+	bin/switchyard config validate --config "$$tmp"; \
+	rm -f "$$tmp"
 
 install-user:
 	mkdir -p "$(APP_HOME)" "$(BIN_DIR)"
