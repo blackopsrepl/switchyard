@@ -1,0 +1,69 @@
+# frozen_string_literal: true
+
+require_relative "test_helper"
+
+# Structural contract for the QuickShell panel.
+#
+# qmllint cannot validate this file in CI (the Quickshell ShellRoot type only
+# exists where Quickshell is installed), so the panel's load-bearing shape is
+# asserted here instead of being left to a gate that can only fail.
+class PanelTest < Minitest::Test
+  PANEL = File.expand_path("../frontend/quickshell/shell.qml", __dir__)
+
+  def panel_source
+    @panel_source ||= File.read(PANEL)
+  end
+
+  def test_panel_exists
+    assert File.file?(PANEL), "frontend/quickshell/shell.qml is the only human UI"
+  end
+
+  def test_panel_is_a_shellroot_with_a_panelwindow
+    assert_includes panel_source, "ShellRoot {"
+    assert_includes panel_source, "PanelWindow {"
+  end
+
+  # The panel is a cached-state renderer: it reads state files and dispatches
+  # CLI commands, and must never run systemd itself. (Naming systemctl in a
+  # tooltip is fine; invoking it is not.)
+  def test_panel_never_invokes_systemctl_journalctl_or_the_daemon_socket
+    refute_match(/Process\s*\{[^}]*systemctl/m, panel_source)
+    refute_match(/command:\s*\[[^\]]*systemctl/, panel_source)
+    refute_match(/daemon\.sock/, panel_source)
+    refute_match(/command:\s*\[[^\]]*journalctl/, panel_source)
+  end
+
+  def test_panel_watches_the_snapshot_ui_log_and_event_files
+    %w[snapshot.json ui.json log.json state-event.json].each do |file|
+      assert_includes panel_source, file
+    end
+  end
+
+  # Everything the presenter emits and the panel renders by name.
+  def test_panel_reads_the_presenter_contract
+    %w[status kind port probeUp sinceBoot uptimeText restarts memoryText appRoot
+       signals fragmentPath probeStatus probeConnectMs].each do |field|
+      assert_includes panel_source, field, "panel does not render #{field}"
+    end
+  end
+
+  # Every mutation is one of the CLI commands the daemon actually handles.
+  def test_panel_dispatches_only_real_cli_commands
+    commands = panel_source.scan(/runSwitchyard\(\["([a-z-]+)"/).flatten.uniq.sort
+    allowed = %w[open refresh ui start stop restart reload enable disable reset-failed logs]
+
+    assert_equal [], commands - allowed, "panel dispatches an unknown command"
+    assert_includes commands, "ui"
+  end
+
+  def test_panel_wires_the_omarchy_theme_palette
+    assert_includes panel_source, "OMARCHY_THEME_COLORS"
+    assert_includes panel_source, "themeColor("
+  end
+
+  # A Repeater delegate must be an Item; Shortcut is a QtObject.
+  def test_shortcuts_are_not_in_a_repeater
+    assert_includes panel_source, "Shortcut {"
+    refute_match(/Repeater\s*\{[^}]*Shortcut/, panel_source)
+  end
+end

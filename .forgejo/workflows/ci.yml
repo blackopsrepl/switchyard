@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: syntax, tests, cli
+    runs-on: ruby
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v6
+
+      # make check needs ripgrep for its file list. It fails fast when rg is
+      # missing rather than silently skipping the syntax check.
+      - name: Install gate tooling
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ripgrep
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Run project checks
+        run: make check
+
+# See .github/workflows/ci.yml: qmllint is not a usable gate in a container
+# without Quickshell, so the panel contract is asserted by test/panel_test.rb.

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: syntax, tests, cli
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      # make check needs ripgrep for its file list, and fails fast without it.
+      - name: Install gate tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
+          sudo rm -rf /var/lib/apt/lists/*
+
+      # Syntax, the Ruby suite (which includes the QuickShell structural
+      # contract test), and config validation.
+      - name: Run project checks
+        run: make check
+
+# The panel is deliberately NOT linted here: qmllint cannot resolve the
+# Quickshell `ShellRoot` type (it ships only with a Quickshell install) and exits
+# non-zero on an otherwise clean panel, so a lint step would be permanently red
+# noise. `make lint` covers that locally where Quickshell is installed, and
+# test/panel_test.rb asserts the panel's structural contract on every run.

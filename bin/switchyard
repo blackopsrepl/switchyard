@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Switchyard runs as a systemd --user service, which inherits no locale. Under a
+# C/POSIX locale Ruby tags file and stream content US-ASCII and then raises on
+# the first non-ASCII byte, in the JSON parser or on `warn`. Pin the encodings
+# before loading anything that reads or writes state, so the tool behaves the
+# same from an interactive shell and from the service manager.
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = nil
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
+require "switchyard"
+
+# A CLI branch that ends on a print returns nil; `exit(nil)` raises TypeError, so
+# the code is normalized rather than trusted.
+exit(Switchyard::CLI.exit_code(Switchyard::CLI.run(ARGV)))

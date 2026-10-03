@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_CONFIG="$(mktemp -t switchyard-release-check-XXXXXX.json)"
+TMP_STATE="$(mktemp -d -t switchyard-release-check-state-XXXXXX)"
+TMP_HARNESS="$(mktemp -d -t switchyard-release-check-harness-XXXXXX)"
+SWAY_PID=""
+QS_PID=""
+
+cleanup() {
+  [ -n "$QS_PID" ] && kill "$QS_PID" 2>/dev/null || true
+  [ -n "$SWAY_PID" ] && kill "$SWAY_PID" 2>/dev/null || true
+  if [ -f "$TMP_STATE/daemon.lock" ]; then
+    pid="$(cat "$TMP_STATE/daemon.lock" 2>/dev/null || true)"
+    [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$TMP_CONFIG"
+  rm -rf "$TMP_STATE" "$TMP_HARNESS"
+}
+
+run_step() {
+  echo
+  echo "==> $1"
+  shift
+  "$@"
+}
+
+run_ruby_syntax_check() {
+  local files
+  files="$(rg --files bin lib test -g '*.rb')"
+  test -n "$files" || { echo "no Ruby files found to check" >&2; return 1; }
+
+  local failed=0
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    if ! ruby -wc "$file" >/dev/null 2>&1; then
+      echo "syntax error in $file" >&2
+      ruby -wc "$file" >&2 || true
+      failed=1
+    fi
+  done <<<"$files"
+  return "$failed"
+}
+
+# qmllint can only resolve the Quickshell ShellRoot type where Quickshell is
+# installed; with no usable import paths it warns on everything and exits
+# non-zero on a clean panel. Its verdict is meaningful only when the imports
+# resolve, so skip loudly in that case and fail hard on any real error.
+run_qml_lint_check() {
+  command -v qmllint >/dev/null 2>&1 || { echo "qmllint not installed; skipping QML lint"; return 0; }
+
+  local output status
+  set +e
+  output="$(qmllint frontend/quickshell/shell.qml 2>&1)"
+  status=$?
+  set -e
+
+  if grep -q "Warnings occurred while importing\|Failed to import\|Failed to find the following builtins" <<<"$output"; then
+    echo "qmllint cannot resolve the Quickshell/QtQuick imports here (not a panel defect); skipping QML lint."
+    echo "Install Quickshell and run 'make lint' for a conclusive panel lint."
+    return 0
+  fi
+
+  if [[ "$status" -ne 0 ]]; then
+    echo "$output"
+    echo "qmllint rejected frontend/quickshell/shell.qml" >&2
+    return "$status"
+  fi
+}
+
+set_config_state_dir() {
+  ruby -rjson -e '
+    path = ARGV.fetch(0)
+    state_dir = ARGV.fetch(1)
+    config = JSON.parse(File.read(path))
+    config["runtime"] ||= {}
+    config["runtime"]["stateDir"] = state_dir
+    File.write(path, "#{JSON.pretty_generate(config)}\n")
+  ' "$1" "$2"
+}
+
+trap cleanup EXIT
+
+cd "$ROOT_DIR"
+
+run_step "ruby syntax" run_ruby_syntax_check
+run_step "test suite" ruby -Itest test/run.rb
+run_step "qml lint" run_qml_lint_check
+run_step "config init" bash -lc "bin/switchyard config init --config '$TMP_CONFIG' >/dev/null"
+set_config_state_dir "$TMP_CONFIG" "$TMP_STATE"
+run_step "config validate" bin/switchyard config validate --config "$TMP_CONFIG"
+run_step "one scan" bash -lc "bin/switchyard daemon --once --config '$TMP_CONFIG' >/dev/null"
+run_step "snapshot contract" ruby -rjson -e '
+  snapshot = JSON.parse(File.read(ARGV.fetch(0)))
+  view = snapshot.fetch("view")
+  %w[summary alerts units chip].each { |key| raise "view missing #{key}" unless view.key?(key) }
+  %w[total running stopped failing restarts probes ports].each do |key|
+    raise "summary missing #{key}" unless view.dig("summary").key?(key)
+  end
+  view.fetch("units").each do |unit|
+    %w[unit kind status tone enabled restarts workdir appRoot signals
+       port probeUp sinceBoot uptimeText fragmentPath].each do |key|
+      raise "unit #{unit["unit"]} missing #{key}" unless unit.key?(key)
+    end
+  end
+  puts "snapshot: #{view.dig("summary", "total")} environments, #{view.dig("summary", "failing")} failing"
+' "$TMP_STATE/snapshot.json"
+run_step "list" bash -lc "bin/switchyard repos --config '$TMP_CONFIG' >/dev/null"
+run_step "list json" bash -lc "bin/switchyard repos --json --pretty --config '$TMP_CONFIG' >/dev/null"
+run_step "waybar render" bash -lc "bin/switchyard waybar render --config '$TMP_CONFIG' | ruby -rjson -e 'p = JSON.parse(STDIN.read); raise \"no text\" unless p[\"text\"]; raise \"no class\" unless p[\"class\"].is_a?(Array); puts p[\"text\"]'"
+run_step "ui status" bash -lc "bin/switchyard ui status --json --config '$TMP_CONFIG' >/dev/null"
+run_step "ui selection round trip" bash -lc "
+  first=\$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV.fetch(0))).dig(\"view\",\"units\").first[\"unit\"]' '$TMP_STATE/snapshot.json')
+  bin/switchyard ui select \"\$first\" --config '$TMP_CONFIG' >/dev/null
+  bin/switchyard ui filter failed --config '$TMP_CONFIG' >/dev/null
+  bin/switchyard ui tab logs --config '$TMP_CONFIG' >/dev/null
+  ruby -rjson -e '
+    ui = JSON.parse(File.read(ARGV.fetch(0)))
+    raise \"selection lost\" unless ui[\"selectedUnit\"].to_s.length > 0
+    raise \"filter lost\" unless ui[\"filter\"] == \"failed\"
+    raise \"tab lost\" unless ui[\"detailTab\"] == \"logs\"
+    puts \"ui: #{ui[\"selectedUnit\"]} / #{ui[\"filter\"]} / #{ui[\"detailTab\"]}\"
+  ' '$TMP_STATE/ui.json'
+"
+run_step "config rejects a bad subcommand" bash -lc "! bin/switchyard config nonsense --config '$TMP_CONFIG' 2>/dev/null"
+run_step "detection is explainable" ruby -rjson -e '
+  view = JSON.parse(File.read(ARGV.fetch(0))).fetch("view")
+  view.fetch("units").each do |unit|
+    raise "#{unit["unit"]} has no detection signals" if Array(unit["signals"]).empty?
+  end
+  puts "signals present on all #{view.dig("summary", "total")} units"
+' "$TMP_STATE/snapshot.json"
+
+# Off-desktop panel load: a private headless Sway on its own runtime dir, so the
+# operator's live session is never touched.
+if command -v quickshell >/dev/null 2>&1 && command -v sway >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
+  echo
+  echo "==> quickshell load (private headless sway)"
+  mkdir -p "$TMP_HARNESS/run" "$TMP_HARNESS/state"
+  chmod 700 "$TMP_HARNESS/run"
+  cp "$TMP_STATE"/*.json "$TMP_HARNESS/state/" 2>/dev/null || true
+  ruby -rjson -e '
+    path = ARGV.fetch(0)
+    ui = JSON.parse(File.read(path))
+    ui["open"] = true
+    File.write(path, "#{JSON.pretty_generate(ui)}\n")
+  ' "$TMP_HARNESS/state/ui.json"
+  printf 'output HEADLESS-1 resolution 1440x900\n' > "$TMP_HARNESS/sway.conf"
+
+  XDG_RUNTIME_DIR="$TMP_HARNESS/run" WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
+    sway -c "$TMP_HARNESS/sway.conf" >"$TMP_HARNESS/sway.log" 2>&1 &
+  SWAY_PID=$!
+  sleep 2
+
+  XDG_RUNTIME_DIR="$TMP_HARNESS/run" WAYLAND_DISPLAY=wayland-1 \
+    SWITCHYARD_CONFIG="$TMP_CONFIG" SWITCHYARD_STATE_DIR="$TMP_HARNESS/state" \
+    SWITCHYARD_BIN="$ROOT_DIR/bin/switchyard" QT_QPA_PLATFORM=wayland QS_NO_RELOAD_POPUP=1 \
+    quickshell --path "$ROOT_DIR/frontend/quickshell/shell.qml" >"$TMP_HARNESS/qs.log" 2>&1 &
+  QS_PID=$!
+  sleep 4
+
+  if grep -qE '^\s*ERROR|Failed to load configuration' "$TMP_HARNESS/qs.log"; then
+    echo "panel failed to load:" >&2
+    cat "$TMP_HARNESS/qs.log" >&2
+    exit 1
+  fi
+  grep -q "Configuration Loaded" "$TMP_HARNESS/qs.log" || { echo "panel never reported Configuration Loaded" >&2; cat "$TMP_HARNESS/qs.log" >&2; exit 1; }
+
+  XDG_RUNTIME_DIR="$TMP_HARNESS/run" WAYLAND_DISPLAY=wayland-1 grim "$TMP_HARNESS/panel.png"
+  test -s "$TMP_HARNESS/panel.png" || { echo "panel screenshot is empty" >&2; exit 1; }
+  echo "panel rendered $(stat -c %s "$TMP_HARNESS/panel.png") bytes at 1440x900"
+else
+  echo
+  echo "==> quickshell load skipped (needs quickshell, sway and grim)"
+fi
+
+echo
+echo "release-check passed"
