@@ -12,6 +12,10 @@ module Switchyard
       # which is exactly what made "restarts 2413" and "since boot" disagree.
       BOOT_WINDOW_SECONDS = 300
 
+      # Restarts per minute since boot above which a unit is considered to be
+      # cycling rather than merely restarted.
+      CYCLING_RESTARTS_PER_MINUTE = 1.0
+
       STATUS_TONE = {
         "running" => "good",
         "reloading" => "info",
@@ -44,7 +48,7 @@ module Switchyard
       end
 
       def unit_view(config, row, now = Time.now)
-        status = status_of(row)
+        status = status_of(row, now)
         {
           unit: row[:unit],
           kind: row[:kind],
@@ -83,7 +87,11 @@ module Switchyard
         }
       end
 
-      def status_of(row)
+      def status_of(row, now = Time.now)
+        # Cycling outranks the transient state: a unit in the middle of a restart
+        # storm is not "running" just because its last start got as far as exec.
+        return "crash-loop" if cycling?(row, now)
+
         active = row[:activeState].to_s
         sub = row[:subState].to_s
         case active
@@ -95,6 +103,25 @@ module Switchyard
         when "deactivating" then "reloading"
         else "unknown"
         end
+      end
+
+      # A unit systemd has restarted more than CYCLING_RESTARTS_PER_MINUTE times
+      # per minute since boot is cycling. NRestarts is per unit load, and units
+      # are loaded at boot, so NRestarts / uptime is a real rate.
+      #
+      # This exists because the transient is not catchable: a unit whose
+      # ExecStart dies in a few hundred milliseconds alternates between
+      # `activating/auto-restart` and `active/running`, and a 10-second scan
+      # catches `active/running` often enough to make a permanently broken
+      # environment flicker into the healthy count. The counter only grows, so
+      # the rate is the stable signal.
+      def cycling?(row, now = Time.now)
+        return false unless row[:restarts].to_i.positive?
+
+        uptime = host_uptime_seconds
+        return false unless uptime.positive?
+
+        (row[:restarts].to_i / (uptime / 60.0)) >= CYCLING_RESTARTS_PER_MINUTE
       end
 
       # A unit started seconds after the host booted has no meaningful uptime:

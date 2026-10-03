@@ -80,6 +80,12 @@
 - Keep the presenter the single source of status. `Runtime::Presenter` maps
   ActiveState/SubState to the status vocabulary (`running`, `crash-loop`,
   `failed`, `stopped`, `unknown`); the panel must not re-derive it.
+- A unit is `crash-loop` when it is cycling, decided by restarts-per-minute since
+  boot, **not** by its transient state. A unit whose ExecStart dies in a few
+  hundred milliseconds alternates between `activating/auto-restart` and
+  `active/running`, so a state-only test makes a permanently broken environment
+  flicker into the healthy count on the scans that catch the running phase. The
+  counter only ever grows, so the rate is the stable signal.
 - `active/activating/auto-restart` is a crash-loop, and an enabled unit in
   `failed` is one too. Reporting either as "running" is the bug this tool exists
   to prevent.

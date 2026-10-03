@@ -12,6 +12,7 @@ module Switchyard
       def scan_effect(config_path)
         config = Core::Config.load_config(config_path)
         State.with_scan_lock(config) do
+          previous = State.read_snapshot(config)
           units = Core::Systemd.unit_names(config, unit_glob(config))
           fields = Core::Systemd.show(config, units)
           environments = fields.values.filter_map { |unit_fields| Core::Detect.classify(config, unit_fields) }
@@ -32,8 +33,21 @@ module Switchyard
             view: Presenter.build_view(config, rows, now)
           }
           State.write_snapshot(config, snapshot)
+          notify_bar(config, previous, snapshot)
           snapshot
         end
+      end
+
+      # Wake the Waybar chip when what it displays actually changed, so a click
+      # that restarts a unit is reflected immediately instead of waiting out the
+      # chip's poll interval. The comparison keeps a 10-second scan from
+      # re-running the module every tick for no reason.
+      def notify_bar(config, previous, snapshot)
+        before = previous && previous.dig(:view, :chip)
+        after = snapshot.dig(:view, :chip)
+        return if before == after
+
+        signal_waybar(config)
       end
 
       def unit_glob(config)

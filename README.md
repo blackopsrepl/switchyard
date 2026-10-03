@@ -95,6 +95,20 @@ switchyard open URL
 - `runtime.refreshSeconds`, `runtime.stateDir`, `runtime.quickShellShell`,
   `runtime.waybarSignal`.
 
+## Waybar chip
+
+Switchyard ships a chip in the SolverForge Linux bar (`solverforge-waybar-switchyard`,
+rendered by `switchyard waybar render`), positioned at the head of `modules-right`,
+left of `custom/cronbar`. It shows `N/M up`, or `N/M K failing` in the crit colour
+when an environment is crash-looping, with the full breakdown in the tooltip.
+
+- Left click opens the panel, middle click rescans, right click prints the status.
+- The daemon signals the chip (RTMIN+15) whenever the chip's content actually
+  changes, so a restart is visible immediately instead of waiting out the poll
+  interval.
+- The shim renders an empty chip carrying the `.empty` class when Switchyard is
+  not installed, so a machine without it shows no bordered hole in the bar.
+
 ## Runtime flow
 
 `switchyard daemon` owns the scan timer, every mutation, and the journal fetch.

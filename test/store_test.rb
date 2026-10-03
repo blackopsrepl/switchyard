@@ -98,4 +98,35 @@ class StoreTest < Minitest::Test
 
     assert_equal %i[holder scanner], order
   end
+
+  # The chip is a cached renderer with its own poll interval, so without this the
+  # bar would lag a restart by up to that interval.
+  def test_the_bar_is_signalled_when_the_chip_changes
+    path = write_test_config(servicePatterns: ["switchyard-no-such-unit.service"])
+    config = Switchyard::Core::Config.load_config(path)
+    signals = []
+
+    Switchyard::Runtime::Store.stub(:signal_waybar, ->(c) { signals << c }) do
+      # First scan: no previous chip, so the bar is told.
+      Switchyard::Runtime::Store.scan_effect(path)
+      assert_equal 1, signals.length, "the bar was not signalled on the first scan"
+
+      # Same result again: nothing the chip displays has changed, so no wake-up.
+      Switchyard::Runtime::Store.scan_effect(path)
+      assert_equal 1, signals.length, "the bar was signalled for an unchanged chip"
+    end
+  end
+
+  def test_an_unchanged_chip_does_not_signal
+    path = write_test_config
+    config = Switchyard::Core::Config.load_config(path)
+    snapshot = Switchyard::Runtime::State.read_snapshot(config) || Switchyard::Runtime::Store.scan_effect(path)
+    signals = []
+
+    Switchyard::Runtime::Store.stub(:signal_waybar, ->(c) { signals << c }) do
+      Switchyard::Runtime::Store.notify_bar(config, snapshot, snapshot)
+    end
+
+    assert_empty signals
+  end
 end

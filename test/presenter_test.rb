@@ -41,6 +41,28 @@ class PresenterTest < Minitest::Test
     assert_equal "bad", view[:tone]
   end
 
+  # A crash-looping unit alternates between `auto-restart` (queued) and
+  # `active/running` (the doomed ExecStart getting as far as exec). A scan that
+  # catches the running phase must not report the environment as healthy — that
+  # flicker is what the restart-rate rule exists to remove.
+  def test_a_cycling_unit_reading_active_is_still_a_crash_loop
+    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "active", subState: "running", restarts: 3214))
+
+    assert_equal "crash-loop", view[:status]
+  end
+
+  # A unit restarted once long ago is not cycling.
+  def test_a_unit_with_a_stale_single_restart_is_running
+    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "active", subState: "running", restarts: 1))
+
+    assert_equal "running", view[:status]
+  end
+
+  def test_cycling_is_decided_by_restarts_per_minute_since_boot
+    assert Switchyard::Runtime::Presenter.cycling?(row(restarts: 3000))
+    refute Switchyard::Runtime::Presenter.cycling?(row(restarts: 0))
+  end
+
   def test_failed_but_disabled_is_a_plain_failure
     view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "failed", subState: "failed", unitFileState: "disabled"))
 
