@@ -66,4 +66,23 @@ class PanelTest < Minitest::Test
     assert_includes panel_source, "Shortcut {"
     refute_match(/Repeater\s*\{[^}]*Shortcut/, panel_source)
   end
+
+  def test_panel_is_a_bar_positioned_compact_popover
+    assert_includes panel_source, "property int popupTopMargin: 52"
+    assert_match(/id: modalFrame\s+anchors\.horizontalCenter: parent\.horizontalCenter\s+anchors\.top: parent\.top\s+anchors\.topMargin: root\.popupTopMargin/m, panel_source)
+    assert_includes panel_source, "width: Math.min(480, Math.max(1, panel.width - 24))"
+    refute_includes panel_source, "width: Math.min(1180"
+    refute_includes panel_source, "mask: Region { item: modalFrame"
+  end
+
+  def test_clicking_outside_the_popover_dismisses_it_without_a_scrim
+    assert_match(/MouseArea\s*\{\s*anchors\.fill: parent\s*onClicked: root\.closePanel\(\)/m, panel_source)
+    assert_includes panel_source, "color: \"transparent\""
+  end
+
+  def test_compact_popover_stacks_unit_list_and_details
+    assert_includes panel_source, 'text: "Rails · " + root.summaryLine()'
+    assert_includes panel_source, "Layout.preferredHeight: Math.min(180, Math.max(58, root.filteredUnits().length * 60))"
+    assert_includes panel_source, "Layout.preferredHeight: 220"
+  end
 end

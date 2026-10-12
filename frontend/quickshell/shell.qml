@@ -78,16 +78,18 @@ ShellRoot {
     property string pendingAction: ""
     property string actionError: ""
 
-    // Frame height computed from the parts we actually know, rather than from
-    // implicit heights (a ListView and a fillHeight pane both report ~0, which
-    // collapses the frame). Clamped to the viewport, floored at 420.
+    // The bar chip lives in a separate Waybar process, so QuickShell cannot
+    // anchor to its item. Place this compact popover just below Waybar's
+    // reserved top edge and center it on the output. Size from known parts;
+    // ListView and fill-height content report near-zero implicit heights.
+    property int popupTopMargin: 52
+
     function modalHeight() {
-        var chrome = 92 + 32 + 44
-        if (root.alerts.length > 0) { chrome += 46 }
-        var listHeight = root.filteredUnits().length * 60 + 8
-        var panes = Math.max(400, listHeight)
-        var viewport = panel.height - (panel.verticalMargin * 2)
-        return Math.max(420, Math.min(viewport, chrome + panes))
+        var listHeight = Math.min(180, Math.max(58, root.filteredUnits().length * 60))
+        var height = 374 + listHeight
+        if (root.alerts.length > 0) { height += 42 }
+        var availableHeight = Math.max(1, panel.height - root.popupTopMargin - 18)
+        return Math.min(availableHeight, Math.max(420, height))
     }
 
     readonly property var filterOptions: [
@@ -710,16 +712,13 @@ ShellRoot {
         id: panel
         visible: uiAdapter.open
         screen: Quickshell.screens.length ? Quickshell.screens[0] : null
-        property int verticalMargin: 18
         implicitWidth: screen ? screen.width : 1440
         implicitHeight: screen ? screen.height : 900
         color: "transparent"
-        // Mac-bar behavior: the overlay never steals keyboard focus (the
-        // compositor grants it on click) and the input mask is bound to the
-        // modal frame, so clicks outside the card reach the desktop instead
-        // of being swallowed by an invisible fullscreen surface.
+        // Keep the panel surface transparent, but make the empty area an
+        // outside-click dismiss target. OnDemand avoids stealing keyboard
+        // focus when the popover opens.
         WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
-        mask: Region { item: modalFrame; intersection: Intersection.Intersect }
         aboveWindows: true
         exclusionMode: ExclusionMode.Ignore
         anchors {
@@ -768,22 +767,24 @@ ShellRoot {
         Item {
             anchors.fill: parent
 
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.closePanel()
+            }
+
             Rectangle {
                 id: modalFrame
-                anchors.centerIn: parent
-                width: Math.min(1180, Math.max(320, panel.width - 36))
-                // Fills the viewport (minus a small margin). Deriving the height
-                // from content implicit heights collapses it — a ListView and a
-                // fillHeight pane both report a near-zero implicit height — which
-                // squeezes the rows until they clip into each other.
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: root.popupTopMargin
+                width: Math.min(480, Math.max(1, panel.width - 24))
                 height: root.modalHeight()
                 color: root.theme.bg
                 border.color: root.theme.good
                 border.width: 1
-                radius: 4
-                // Swallow clicks that land on the frame but miss every control;
-                // the window mask lets everything outside it through to the
-                // desktop, so the catcher only ever sees in-card clicks.
+                radius: 8
+                // Keep dead space inside the popover interactive without
+                // exposing the backdrop catcher beneath the card.
                 MouseArea {
                     anchors.fill: parent
                     z: -1
@@ -813,7 +814,7 @@ ShellRoot {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: "Rails development environments via systemd  ·  " + root.summaryLine()
+                                text: "Rails · " + root.summaryLine()
                                 color: root.theme.goodSoft
                                 font.family: root.textFont
                                 font.pixelSize: 12
@@ -915,18 +916,16 @@ ShellRoot {
                         }
                     }
 
-                    RowLayout {
+                    ColumnLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        Layout.minimumHeight: 320
-                        spacing: 12
+                        Layout.minimumHeight: 286
+                        spacing: 8
 
                         Rectangle {
-                            Layout.preferredWidth: 420
-                            Layout.minimumWidth: 360
-                            Layout.maximumWidth: 460
-                            Layout.fillWidth: false
-                            Layout.fillHeight: true
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredHeight: Math.min(180, Math.max(58, root.filteredUnits().length * 60))
                             color: root.theme.surfaceDeep
                             border.color: root.theme.border
                             border.width: 1
@@ -960,8 +959,8 @@ ShellRoot {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.minimumWidth: 360
-                            Layout.fillHeight: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredHeight: 220
                             color: root.theme.surfaceDeep
                             border.color: root.theme.border
                             border.width: 1
