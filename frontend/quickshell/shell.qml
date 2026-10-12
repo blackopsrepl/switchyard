@@ -113,11 +113,6 @@ ShellRoot {
         return root.theme.textMuted
     }
 
-    function toneFill(tone) {
-        var color = root.toneColor(tone)
-        return Qt.rgba(color.r, color.g, color.b, tone === "muted" ? 0.10 : 0.16)
-    }
-
     function matchesFilter(unit) {
         var filter = uiAdapter.filter
         if (filter === "running") { return unit.status === "running" || unit.status === "reloading" }
@@ -269,25 +264,40 @@ ShellRoot {
         return parts.join("  ·  ")
     }
 
+    // Streamlined badge: tone carried by a left dot, not a filled pill, so a
+    // row of them costs half the width while still reading at a glance. The
+    // full label stays visible; nothing moved into a tooltip that the row
+    // cannot already show.
     component Badge: Rectangle {
         id: badge
 
         property string label: ""
         property string tone: "muted"
 
-        implicitWidth: badgeText.implicitWidth + 12
-        implicitHeight: 15
+        implicitWidth: badgeDot.implicitWidth + 4 + badgeText.implicitWidth + 8
+        implicitHeight: 14
         radius: 3
-        color: root.toneFill(badge.tone)
+        color: "transparent"
+
+        Text {
+            id: badgeDot
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            text: "●"
+            color: root.toneColor(badge.tone)
+            font.family: root.textFont
+            font.pixelSize: 7
+        }
 
         Text {
             id: badgeText
-            anchors.centerIn: parent
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: badgeDot.right
+            anchors.leftMargin: 4
             text: badge.label
             color: root.toneColor(badge.tone)
             font.family: root.textFont
             font.pixelSize: 8
-            font.bold: true
         }
     }
 
