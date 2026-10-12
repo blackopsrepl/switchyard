@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 
 ShellRoot {
     id: root
@@ -40,7 +41,6 @@ ShellRoot {
 
     readonly property QtObject theme: QtObject {
         readonly property color bg: root.themeColor("background", "#0B0C16")
-        readonly property color bgDeep: root.themeColor("dark_background", "#050711")
         readonly property color surfaceDeep: root.themeColor("selection", "#0F1324")
         readonly property color surfaceAlt: root.themeColor("lighter_background", "#141528")
         readonly property color surfaceHover: root.themeColor("selection", "#18233C")
@@ -704,7 +704,12 @@ ShellRoot {
         implicitWidth: screen ? screen.width : 1440
         implicitHeight: screen ? screen.height : 900
         color: "transparent"
-        focusable: true
+        // Mac-bar behavior: the overlay never steals keyboard focus (the
+        // compositor grants it on click) and the input mask is bound to the
+        // modal frame, so clicks outside the card reach the desktop instead
+        // of being swallowed by an invisible fullscreen surface.
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+        mask: Region { item: modalFrame; intersection: Intersection.Intersect }
         aboveWindows: true
         exclusionMode: ExclusionMode.Ignore
         anchors {
@@ -754,12 +759,6 @@ ShellRoot {
             anchors.fill: parent
 
             Rectangle {
-                anchors.fill: parent
-                color: root.theme.bgDeep
-                opacity: 0.66
-            }
-
-            Rectangle {
                 id: modalFrame
                 anchors.centerIn: parent
                 width: Math.min(1180, Math.max(320, panel.width - 36))
@@ -772,7 +771,13 @@ ShellRoot {
                 border.color: root.theme.good
                 border.width: 1
                 radius: 4
-                focus: true
+                // Swallow clicks that land on the frame but miss every control;
+                // the window mask lets everything outside it through to the
+                // desktop, so the catcher only ever sees in-card clicks.
+                MouseArea {
+                    anchors.fill: parent
+                    z: -1
+                }
                 Keys.onEscapePressed: root.closePanel()
 
                 ColumnLayout {
