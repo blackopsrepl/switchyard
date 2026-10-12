@@ -78,18 +78,22 @@ ShellRoot {
     property string pendingAction: ""
     property string actionError: ""
 
-    // The bar chip lives in a separate Waybar process, so QuickShell cannot
-    // anchor to its item. Place this compact popover just below Waybar's
-    // reserved top edge and center it on the output. Size from known parts;
-    // ListView and fill-height content report near-zero implicit heights.
+    // Waybar and QuickShell are separate processes, so the chip cannot provide
+    // an anchor item. Keep a generous anchored-to-bar panel rather than
+    // shrinking the service list and its operational details into a tiny card.
     property int popupTopMargin: 52
+    property int popupMaxWidth: 920
+    property int popupMaxHeight: 760
+    property int popupMinHeight: 620
 
     function modalHeight() {
-        var listHeight = Math.min(180, Math.max(58, root.filteredUnits().length * 60))
-        var height = 374 + listHeight
-        if (root.alerts.length > 0) { height += 42 }
-        var availableHeight = Math.max(1, panel.height - root.popupTopMargin - 18)
-        return Math.min(availableHeight, Math.max(420, height))
+        // The list rows drive the panel's height; cap at the viewport so larger
+        // installations scroll instead of growing over the whole desktop.
+        var rowsHeight = 195 + root.filteredUnits().length * 60
+        var alertsHeight = Math.min(96, root.alerts.length * 30)
+        var desiredHeight = Math.max(root.popupMinHeight, rowsHeight + alertsHeight)
+        var availableHeight = Math.max(1, panel.height - root.popupTopMargin - 24)
+        return Math.min(root.popupMaxHeight, availableHeight, desiredHeight)
     }
 
     readonly property var filterOptions: [
@@ -418,6 +422,44 @@ ShellRoot {
         onClicked: tabButton.picked()
     }
 
+    component SummaryTile: Rectangle {
+        id: summaryTile
+
+        property string label: ""
+        property string value: ""
+        property string tone: "muted"
+
+        implicitWidth: 120
+        implicitHeight: 46
+        radius: 4
+        color: root.theme.bg
+        border.width: 1
+        border.color: root.theme.border
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 8
+            spacing: 3
+
+            Text {
+                text: summaryTile.label
+                color: root.theme.textMuted
+                font.family: root.textFont
+                font.pixelSize: 9
+                font.bold: true
+            }
+            Text {
+                Layout.fillWidth: true
+                text: summaryTile.value
+                color: root.toneColor(summaryTile.tone)
+                font.family: root.textFont
+                font.pixelSize: 12
+                font.bold: true
+                elide: Text.ElideRight
+            }
+        }
+    }
+
     // One environment row. The status stripe, the badges and the port/probe
     // column all read the presenter projection; nothing here derives state.
     // Positioned with anchors rather than nested Layouts: three nested
@@ -595,7 +637,6 @@ ShellRoot {
         if (unit.restarts > 0) { parts.push(unit.restarts + " restarts") }
         if (unit.uptimeText) { parts.push(unit.uptimeText + (unit.sinceBoot ? " (boot)" : " up")) }
         if (unit.memoryText) { parts.push(unit.memoryText) }
-        parts.push(unit.appRoot ? "rails app" : (unit.kind === "site" ? "static site" : unit.kind))
         return parts.join("  ·  ")
     }
 
@@ -777,10 +818,10 @@ ShellRoot {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
                 anchors.topMargin: root.popupTopMargin
-                width: Math.min(480, Math.max(1, panel.width - 24))
+                width: Math.min(root.popupMaxWidth, Math.max(1, panel.width - 24))
                 height: root.modalHeight()
                 color: root.theme.bg
-                border.color: root.theme.good
+                border.color: root.theme.borderStrong
                 border.width: 1
                 radius: 8
                 // Keep dead space inside the popover interactive without
@@ -814,7 +855,7 @@ ShellRoot {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: "Rails · " + root.summaryLine()
+                                text: root.summaryLine()
                                 color: root.theme.goodSoft
                                 font.family: root.textFont
                                 font.pixelSize: 12
@@ -916,51 +957,84 @@ ShellRoot {
                         }
                     }
 
-                    ColumnLayout {
+                    RowLayout {
+                        id: dashboardColumns
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        Layout.minimumHeight: 286
-                        spacing: 8
+                        Layout.minimumHeight: 360
+                        spacing: 10
 
                         Rectangle {
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            Layout.preferredHeight: Math.min(180, Math.max(58, root.filteredUnits().length * 60))
+                            id: unitListCard
+                            Layout.preferredWidth: Math.min(420, Math.max(350, dashboardColumns.width * 0.44))
+                            Layout.minimumWidth: 350
+                            Layout.fillHeight: true
+                            Layout.minimumHeight: 360
                             color: root.theme.surfaceDeep
                             border.color: root.theme.border
                             border.width: 1
                             radius: 4
 
-                            ListView {
-                                id: unitList
+                            ColumnLayout {
                                 anchors.fill: parent
-                                anchors.margins: 4
-                                clip: true
-                                spacing: 2
-                                model: root.filteredUnits()
-                                boundsBehavior: Flickable.StopAtBounds
+                                anchors.margins: 8
+                                spacing: 8
 
-                                delegate: UnitRow {
-                                    width: unitList.width
-                                    rowData: modelData
-                                    rowSelected: root.selectedIndex() === index
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Text {
+                                        text: "Environments"
+                                        color: root.theme.text
+                                        font.family: root.textFont
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        text: root.filteredUnits().length + " visible"
+                                        color: root.theme.textMuted
+                                        font.family: root.textFont
+                                        font.pixelSize: 10
+                                    }
                                 }
 
-                                Text {
-                                    anchors.centerIn: parent
-                                    visible: unitList.count === 0
-                                    text: "No environment matches this filter."
-                                    color: root.theme.textMuted
-                                    font.family: root.textFont
-                                    font.pixelSize: 11
+                                ListView {
+                                    id: unitList
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: 0
+                                    Layout.minimumHeight: 0
+                                    clip: true
+                                    spacing: 2
+                                    model: root.filteredUnits()
+                                    boundsBehavior: Flickable.StopAtBounds
+
+                                    delegate: UnitRow {
+                                        width: unitList.width
+                                        rowData: modelData
+                                        rowSelected: root.selectedIndex() === index
+                                    }
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        visible: unitList.count === 0
+                                        text: "No environment matches this filter."
+                                        color: root.theme.textMuted
+                                        font.family: root.textFont
+                                        font.pixelSize: 11
+                                    }
                                 }
                             }
                         }
 
                         Rectangle {
+                            id: detailCard
                             Layout.fillWidth: true
+                            Layout.fillHeight: true
                             Layout.minimumWidth: 0
-                            Layout.preferredHeight: 220
+                            Layout.minimumHeight: 360
                             color: root.theme.surfaceDeep
                             border.color: root.theme.border
                             border.width: 1
@@ -989,6 +1063,37 @@ ShellRoot {
                                     font.family: root.textFont
                                     font.pixelSize: 10
                                     elide: Text.ElideRight
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    visible: root.selectedUnitEntry() !== null
+
+                                    SummaryTile {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        label: "STATE"
+                                        value: root.selectedUnitEntry() ? String(root.selectedUnitEntry().status).toUpperCase() : ""
+                                        tone: root.selectedUnitEntry() ? root.statusTone(root.selectedUnitEntry().status) : "muted"
+                                    }
+                                    SummaryTile {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        label: "LISTENER"
+                                        value: root.selectedUnitEntry() && root.selectedUnitEntry().port ? (":" + root.selectedUnitEntry().port) : "NONE"
+                                        tone: root.selectedUnitEntry() && root.selectedUnitEntry().port ? "info" : "muted"
+                                    }
+                                    SummaryTile {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        label: "HEALTH"
+                                        value: root.selectedUnitEntry() && root.selectedUnitEntry().probeUp
+                                            ? ("HTTP " + (root.selectedUnitEntry().probeStatus || "200"))
+                                            : (root.selectedUnitEntry() && root.selectedUnitEntry().port ? "NO RESPONSE" : "NOT PROBED")
+                                        tone: root.selectedUnitEntry() && root.selectedUnitEntry().probeUp ? "good"
+                                            : (root.selectedUnitEntry() && root.selectedUnitEntry().port ? "warn" : "muted")
+                                    }
                                 }
 
                                 RowLayout {
@@ -1081,6 +1186,7 @@ ShellRoot {
                                         contentHeight: overviewColumn.implicitHeight
                                         clip: true
                                         boundsBehavior: Flickable.StopAtBounds
+                                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                                         ColumnLayout {
                                             id: overviewColumn
@@ -1169,6 +1275,7 @@ ShellRoot {
                                         contentHeight: infoColumn.implicitHeight
                                         clip: true
                                         boundsBehavior: Flickable.StopAtBounds
+                                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                                         ColumnLayout {
                                             id: infoColumn
@@ -1254,6 +1361,7 @@ ShellRoot {
                                             contentHeight: logColumn.implicitHeight
                                             clip: true
                                             boundsBehavior: Flickable.StopAtBounds
+                                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                                             Column {
                                                 id: logColumn

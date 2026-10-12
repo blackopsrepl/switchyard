@@ -67,11 +67,23 @@ class PanelTest < Minitest::Test
     refute_match(/Repeater\s*\{[^}]*Shortcut/, panel_source)
   end
 
-  def test_panel_is_a_bar_positioned_compact_popover
+  def test_panel_is_a_bar_positioned_roomy_operational_panel
     assert_includes panel_source, "property int popupTopMargin: 52"
     assert_match(/id: modalFrame\s+anchors\.horizontalCenter: parent\.horizontalCenter\s+anchors\.top: parent\.top\s+anchors\.topMargin: root\.popupTopMargin/m, panel_source)
-    assert_includes panel_source, "width: Math.min(480, Math.max(1, panel.width - 24))"
-    refute_includes panel_source, "width: Math.min(1180"
+    assert_includes panel_source, "property int popupMaxWidth: 920"
+    assert_includes panel_source, "property int popupMaxHeight: 760"
+    assert_includes panel_source, "property int popupMinHeight: 620"
+    assert_includes panel_source, "root.filteredUnits().length * 60"
+    assert_includes panel_source, "Math.min(96, root.alerts.length * 30)"
+    assert_includes panel_source, "Math.max(root.popupMinHeight, rowsHeight + alertsHeight)"
+    assert_includes panel_source, "ScrollBar.vertical: ScrollBar {"
+    assert_includes panel_source, "policy: ScrollBar.AsNeeded"
+    assert_includes panel_source, "width: Math.min(root.popupMaxWidth, Math.max(1, panel.width - 24))"
+    assert_includes panel_source, "id: dashboardColumns"
+    assert_includes panel_source, "id: unitListCard"
+    assert_includes panel_source, "id: detailCard"
+    refute_includes panel_source, "Layout.preferredHeight: Math.min(180"
+    refute_includes panel_source, "Layout.preferredHeight: 220"
     refute_includes panel_source, "mask: Region { item: modalFrame"
   end
 
@@ -80,9 +92,23 @@ class PanelTest < Minitest::Test
     assert_includes panel_source, "color: \"transparent\""
   end
 
-  def test_compact_popover_stacks_unit_list_and_details
-    assert_includes panel_source, 'text: "Rails · " + root.summaryLine()'
-    assert_includes panel_source, "Layout.preferredHeight: Math.min(180, Math.max(58, root.filteredUnits().length * 60))"
-    assert_includes panel_source, "Layout.preferredHeight: 220"
+  def test_service_kind_is_not_repeated_in_row_metadata
+    assert_includes panel_source, 'Badge { label: unitRow.rowData ? unitRow.rowData.kind'
+    refute_includes panel_source, 'parts.push(unit.appRoot ? "rails app"', "The service kind is repeated in the second row line"
+  end
+
+  def test_panel_keeps_service_list_and_details_side_by_side
+    assert_includes panel_source, 'text: root.summaryLine()'
+    assert_match(/RowLayout\s*\{\s*id: dashboardColumns.*?id: unitListCard.*?id: detailCard/m, panel_source)
+    assert_includes panel_source, 'text: "Environments"'
+    %w[STATE LISTENER HEALTH].each do |label|
+      assert_includes panel_source, "label: \"#{label}\"", "Missing #{label} summary tile"
+    end
+    assert_operator panel_source.scan("Layout.fillHeight: true").length, :>=, 3
+    refute_includes panel_source, "Layout.preferredHeight: Math.min(180"
+    refute_includes panel_source, "Layout.preferredHeight: 220"
+    %w[Start Restart Enable Reset\ failed Open Overview Unit Logs].each do |label|
+      assert_includes panel_source, label
+    end
   end
 end
