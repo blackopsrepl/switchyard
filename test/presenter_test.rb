@@ -45,8 +45,10 @@ class PresenterTest < Minitest::Test
   # `active/running` (the doomed ExecStart getting as far as exec). A scan that
   # catches the running phase must not report the environment as healthy — that
   # flicker is what the restart-rate rule exists to remove.
+  # Host-independent: the uptime driving the rate is supplied, not read from
+  # /proc/uptime, so the fixture cannot silently decay red as the boot ages.
   def test_a_cycling_unit_reading_active_is_still_a_crash_loop
-    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "active", subState: "running", restarts: 3214))
+    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "active", subState: "running", restarts: 3214), uptime: 120)
 
     assert_equal "crash-loop", view[:status]
   end
@@ -59,8 +61,15 @@ class PresenterTest < Minitest::Test
   end
 
   def test_cycling_is_decided_by_restarts_per_minute_since_boot
-    assert Switchyard::Runtime::Presenter.cycling?(row(restarts: 3000))
-    refute Switchyard::Runtime::Presenter.cycling?(row(restarts: 0))
+    # 3 restarts in 120s = 1.5/min — cycling.
+    assert Switchyard::Runtime::Presenter.cycling?(row(restarts: 3), uptime: 120)
+    # 1 restart in 120s = 0.5/min — below the rate, not cycling.
+    refute Switchyard::Runtime::Presenter.cycling?(row(restarts: 1), uptime: 120)
+    refute Switchyard::Runtime::Presenter.cycling?(row(restarts: 0), uptime: 120)
+    # 3000 restarts in 2400s = 75/min on a 40-minute uptime — still cycling.
+    assert Switchyard::Runtime::Presenter.cycling?(row(restarts: 3000), uptime: 2400)
+    # 3000 restarts across 3 days of uptime is 0.7/min — not cycling.
+    refute Switchyard::Runtime::Presenter.cycling?(row(restarts: 3000), uptime: 2400 * 60 * 3)
   end
 
   def test_failed_but_disabled_is_a_plain_failure

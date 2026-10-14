@@ -27,8 +27,8 @@ module Switchyard
 
       module_function
 
-      def build_view(config, rows, now = Time.now)
-        units = rows.map { |row| unit_view(config, row, now) }
+      def build_view(config, rows, now = Time.now, uptime: host_uptime_seconds)
+        units = rows.map { |row| unit_view(config, row, now, uptime: uptime) }
         summary = {
           total: units.length,
           running: units.count { |unit| unit[:status] == "running" || unit[:status] == "reloading" },
@@ -47,8 +47,8 @@ module Switchyard
         }
       end
 
-      def unit_view(config, row, now = Time.now)
-        status = status_of(row, now)
+      def unit_view(config, row, now = Time.now, uptime: host_uptime_seconds)
+        status = status_of(row, now, uptime: uptime)
         {
           unit: row[:unit],
           kind: row[:kind],
@@ -87,10 +87,10 @@ module Switchyard
         }
       end
 
-      def status_of(row, now = Time.now)
+      def status_of(row, now = Time.now, uptime: host_uptime_seconds)
         # Cycling outranks the transient state: a unit in the middle of a restart
         # storm is not "running" just because its last start got as far as exec.
-        return "crash-loop" if cycling?(row, now)
+        return "crash-loop" if cycling?(row, now, uptime: uptime)
 
         active = row[:activeState].to_s
         sub = row[:subState].to_s
@@ -115,10 +115,8 @@ module Switchyard
       # catches `active/running` often enough to make a permanently broken
       # environment flicker into the healthy count. The counter only grows, so
       # the rate is the stable signal.
-      def cycling?(row, now = Time.now)
+      def cycling?(row, now = Time.now, uptime: host_uptime_seconds)
         return false unless row[:restarts].to_i.positive?
-
-        uptime = host_uptime_seconds
         return false unless uptime.positive?
 
         (row[:restarts].to_i / (uptime / 60.0)) >= CYCLING_RESTARTS_PER_MINUTE
