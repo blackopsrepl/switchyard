@@ -55,7 +55,7 @@ class PresenterTest < Minitest::Test
 
   # A unit restarted once long ago is not cycling.
   def test_a_unit_with_a_stale_single_restart_is_running
-    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "active", subState: "running", restarts: 1))
+    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(activeState: "active", subState: "running", restarts: 1), uptime: 3600)
 
     assert_equal "running", view[:status]
   end
@@ -139,15 +139,16 @@ class PresenterTest < Minitest::Test
   # "Restarts 2402 · up 3h" is contradictory unless the panel says the current
   # run started at boot.
   def test_since_boot_marks_a_unit_started_by_the_boot
-    now = Time.now
-    booted_at = now - Switchyard::Runtime::Presenter.host_uptime_seconds
-    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(startedAt: (booted_at + 5).utc.iso8601))
+    now = Time.utc(2026, 1, 1)
+    booted_at = now - 3600
+    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(startedAt: (booted_at + 5).utc.iso8601), now, uptime: 3600)
 
     assert view[:sinceBoot]
   end
 
   def test_since_boot_is_false_for_an_explicit_start
-    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(startedAt: (Time.now - 5).utc.iso8601))
+    now = Time.utc(2026, 1, 1)
+    view = Switchyard::Runtime::Presenter.unit_view(build_config, row(startedAt: (now - 5).utc.iso8601), now, uptime: 3600)
 
     refute view[:sinceBoot]
     assert_equal "running", view[:status]
