@@ -73,7 +73,7 @@ module Switchyard
           cpuSeconds: row[:cpuSeconds],
           startedAt: row[:startedAt],
           uptimeText: Core::Format.age_text(row[:startedAt], now),
-          sinceBoot: since_boot?(row, now),
+          sinceBoot: since_boot?(row, now, uptime: uptime),
           fragmentPath: row[:fragmentPath].to_s,
           port: row[:port],
           portAddress: row[:portAddress],
@@ -124,11 +124,11 @@ module Switchyard
 
       # A unit started seconds after the host booted has no meaningful uptime:
       # its start stamp came from the boot, not from anyone asking for it.
-      def since_boot?(row, now)
+      def since_boot?(row, now, uptime: host_uptime_seconds)
         started = Core::Format.parse_time(row[:startedAt])
         return false if started.nil?
 
-        booted_at = now - host_uptime_seconds
+        booted_at = now - uptime
         started <= booted_at + BOOT_WINDOW_SECONDS
       end
 
