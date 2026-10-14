@@ -84,25 +84,41 @@ ShellRoot {
     property string narrowPanelView: "details"
 
     // Waybar and QuickShell are separate processes, so the chip cannot provide
-    // an anchor item. Keep a generous anchored-to-bar panel rather than
-    // shrinking the service list and its operational details into a tiny card.
+    // an anchor item. The panel therefore hangs from the bar edge (below the
+    // Waybar strip) and takes exactly the height its content needs — counted,
+    // not measured from implicit sizes — up to the viewport, so it never
+    // floats centered and never covers more desktop than the work requires.
     property int popupTopMargin: 52
     property int popupMaxWidth: 920
     property int popupMaxHeight: 760
-    property int popupMinHeight: 620
+    property int popupMinHeight: 480
 
     function modalHeight() {
-        // The list rows drive the panel's height; cap at the viewport so larger
-        // installations scroll instead of growing over the whole desktop.
-        var rowsHeight = 195 + root.filteredUnits().length * 60
-        var alertsHeight = Math.min(96, root.alerts.length * 30)
-        var desiredHeight = Math.max(root.popupMinHeight, rowsHeight + alertsHeight)
-        var availableHeight = Math.max(1, panel.height - root.popupTopMargin - 24)
+        // Counted from the parts actually laid out, never from implicit sizes:
+        // 148 = header (title/summary/action ≈ 64) + alerts gutter + filter
+        // row (26) + modal margins (28) + card chrome (30). The two dashboard
+        // cards each contribute their counted content height and the modal
+        // takes the taller — the list card from its visible rows (60px: 58
+        // row + 2 spacing) plus card header (~44), the detail card from 12
+        // FactRows (~24 each) plus its summary tiles, action row and tabs
+        // (~244 chrome). Capped to what fits between the bar and the screen
+        // edge minus a breathing gap, so the card never overlaps the bottom
+        // edge; overflow scrolls inside the cards with their own affordance.
+        var rowsHeight = Math.min(root.filteredUnits().length, 12) * 60
+        var listCardHeight = rowsHeight + 44
+        var detailCardHeight = 12 * 24 + 244
+        var alertsHeight = root.alerts.length > 0 ? Math.min(96, root.alerts.length * 30) : 0
+        var contentHeight = 148 + Math.max(listCardHeight, detailCardHeight) + alertsHeight
+        var desiredHeight = Math.max(root.popupMinHeight, contentHeight)
+        var availableHeight = Math.max(300, panel.height - root.popupTopMargin - 12)
         return Math.min(root.popupMaxHeight, availableHeight, desiredHeight)
     }
 
     function dashboardMinimumHeight() {
-        return Math.max(180, Math.min(360, root.modalHeight() - 260))
+        // The dashboard card keeps a workable floor while yielding to the
+        // viewport: enough for five list rows or the detail facts, whichever
+        // the modal's counted height can actually carry.
+        return Math.max(200, Math.min(420, root.modalHeight() - 268))
     }
 
     readonly property var filterOptions: [
@@ -882,16 +898,28 @@ ShellRoot {
             }
 
             Rectangle {
+                id: frameShadow
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: root.popupTopMargin + 5
+                width: modalFrame.width
+                height: modalFrame.height
+                color: Qt.rgba(0, 0, 0, 0.35)
+                radius: 10
+                visible: modalFrame.visible
+            }
+
+            Rectangle {
                 id: modalFrame
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
                 anchors.topMargin: root.popupTopMargin
-                width: Math.min(root.popupMaxWidth, Math.max(1, panel.width - 24))
+                width: Math.min(root.popupMaxWidth, Math.max(420, panel.width - 48))
                 height: root.modalHeight()
                 color: root.theme.bg
                 border.color: root.theme.borderStrong
                 border.width: 1
-                radius: 8
+                radius: 10
                 // Keep dead space inside the popover interactive without
                 // exposing the backdrop catcher beneath the card.
                 MouseArea {
@@ -914,12 +942,29 @@ ShellRoot {
                             Layout.fillWidth: true
                             spacing: 2
 
-                            Text {
-                                text: "Switchyard"
-                                color: root.theme.text
-                                font.family: root.textFont
-                                font.pixelSize: root.shortViewport ? 20 : 22
-                                font.bold: true
+                            Row {
+                                spacing: 8
+
+                                Text {
+                                    text: "Switchyard"
+                                    color: root.theme.text
+                                    font.family: root.textFont
+                                    font.pixelSize: root.shortViewport ? 19 : 21
+                                    font.bold: true
+                                }
+                                // Live dot: the panel is a live view; the dot
+                                // carries that at a glance (amber while a scan
+                                // or action is in flight, red on an error).
+                                Rectangle {
+                                    id: liveDot
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 7
+                                    height: 7
+                                    radius: 3.5
+                                    color: root.actionError.length > 0 ? root.theme.bad
+                                        : (root.pendingAction.length > 0 || actionRunner.running || uiActionRunner.running)
+                                            ? root.theme.warn : root.theme.goodSoft
+                                }
                             }
                             Text {
                                 Layout.fillWidth: true
@@ -941,12 +986,16 @@ ShellRoot {
                             }
                         }
 
-                        Button {
-                            text: "Refresh"
+                        ActionButton {
+                            label: "Refresh"
+                            tone: "info"
+                            tooltip: "Re-scan systemd for the tracked units"
                             onClicked: root.refresh()
                         }
-                        Button {
-                            text: "Close"
+                        ActionButton {
+                            label: "Close"
+                            tone: "muted"
+                            tooltip: "Close the panel (Esc)"
                             onClicked: root.closePanel()
                         }
                     }
@@ -1111,7 +1160,7 @@ ShellRoot {
                                 color: root.theme.surfaceDeep
                                 border.color: root.theme.border
                                 border.width: 1
-                                radius: 4
+                                radius: 6
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -1178,7 +1227,7 @@ ShellRoot {
                                 color: root.theme.surfaceDeep
                                 border.color: root.theme.border
                                 border.width: 1
-                                radius: 4
+                                radius: 6
 
                             ColumnLayout {
                                 anchors.fill: parent

@@ -67,24 +67,37 @@ class PanelTest < Minitest::Test
     refute_match(/Repeater\s*\{[^}]*Shortcut/, panel_source)
   end
 
-  def test_panel_is_a_bar_positioned_roomy_operational_panel
+  def test_panel_is_a_bar_sized_drop_down_that_never_overlaps_the_screen
     assert_includes panel_source, "property int popupTopMargin: 52"
     assert_match(/id: modalFrame\s+anchors\.horizontalCenter: parent\.horizontalCenter\s+anchors\.top: parent\.top\s+anchors\.topMargin: root\.popupTopMargin/m, panel_source)
     assert_includes panel_source, "property int popupMaxWidth: 920"
     assert_includes panel_source, "property int popupMaxHeight: 760"
-    assert_includes panel_source, "property int popupMinHeight: 620"
-    assert_includes panel_source, "root.filteredUnits().length * 60"
+    # Content-fitted: the counted height takes the taller dashboard card and
+    # caps at the space between the bar and the screen edge minus a gap —
+    # never a fixed floor that floats the card away from its content, never
+    # a height that overlaps the screen's bottom edge.
+    assert_includes panel_source, "property int popupMinHeight: 480"
+    assert_includes panel_source, "Math.min(root.filteredUnits().length, 12) * 60"
     assert_includes panel_source, "Math.min(96, root.alerts.length * 30)"
-    assert_includes panel_source, "Math.max(root.popupMinHeight, rowsHeight + alertsHeight)"
+    assert_includes panel_source, "Math.max(listCardHeight, detailCardHeight)"
+    assert_includes panel_source, "panel.height - root.popupTopMargin - 12"
     assert_includes panel_source, "ScrollBar.vertical: ScrollBar {"
     assert_includes panel_source, "policy: ScrollBar.AsNeeded"
-    assert_includes panel_source, "width: Math.min(root.popupMaxWidth, Math.max(1, panel.width - 24))"
+    assert_includes panel_source, "width: Math.min(root.popupMaxWidth, Math.max(420, panel.width - 48))"
+    assert_includes panel_source, "id: frameShadow"
     assert_includes panel_source, "id: dashboardColumns"
     assert_includes panel_source, "id: unitListCard"
     assert_includes panel_source, "id: detailCard"
     refute_includes panel_source, "Layout.preferredHeight: Math.min(180"
     refute_includes panel_source, "Layout.preferredHeight: 220"
     refute_includes panel_source, "mask: Region { item: modalFrame"
+  end
+
+  def test_panel_header_carries_the_live_dot_and_family_buttons
+    assert_includes panel_source, "id: liveDot"
+    assert_match(/id: liveDot.*?root\.pendingAction\.length > 0 \|\| actionRunner\.running \|\| uiActionRunner\.running/m, panel_source)
+    assert_match(/ActionButton\s*\{\s*label: "Refresh"/m, panel_source)
+    assert_match(/ActionButton\s*\{\s*label: "Close"/m, panel_source)
   end
 
   def test_clicking_outside_the_popover_dismisses_it_without_a_scrim
