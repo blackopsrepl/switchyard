@@ -79,8 +79,19 @@ ShellRoot {
     property string actionError: ""
     property var actionQueue: []
     property var uiActionQueue: []
-    property bool narrowLayout: panel.width < 720
-    property bool shortViewport: panel.height < 560
+    // Breakpoint props read raw layout inputs (the screen and the counted
+    // card size), never the resolved surface — panel.width participates in
+    // the surface's own sizing and a read-back is a binding loop.
+    function popupWidth() {
+        var screenWidth = panel.screen ? panel.screen.width : 1440
+        return Math.min(root.popupMaxWidth, Math.max(420, screenWidth - 48))
+    }
+
+    property bool narrowLayout: root.popupWidth() < 720
+    // shortViewport reads the screen class, not the card height: a property
+    // derived from the window's own implicitHeight, consumed inside that
+    // window's layout, is the binding loop the scene logger names.
+    property bool shortViewport: (panel.screen ? panel.screen.height : 900) < 620
     property string narrowPanelView: "details"
 
     // Waybar and QuickShell are separate processes, so the chip cannot provide
@@ -110,7 +121,10 @@ ShellRoot {
         var alertsHeight = root.alerts.length > 0 ? Math.min(96, root.alerts.length * 30) : 0
         var contentHeight = 148 + Math.max(listCardHeight, detailCardHeight) + alertsHeight
         var desiredHeight = Math.max(root.popupMinHeight, contentHeight)
-        var availableHeight = Math.max(300, panel.height - root.popupTopMargin - 12)
+        // Reads the SCREEN, never panel.height: the surface height is this
+        // function result plus the margin, so a window read is a self-loop
+        // that shrinks the card to its own floor.
+        var availableHeight = Math.max(300, (panel.screen ? panel.screen.height : 900) - root.popupTopMargin - 12)
         return Math.min(root.popupMaxHeight, availableHeight, desiredHeight)
     }
 
@@ -348,7 +362,7 @@ ShellRoot {
 
         implicitWidth: badgeDot.implicitWidth + 4 + badgeText.implicitWidth + 8
         implicitHeight: 14
-        radius: 3
+        radius: 0
         color: "transparent"
 
         Text {
@@ -369,7 +383,7 @@ ShellRoot {
             text: badge.label
             color: root.toneColor(badge.tone)
             font.family: root.textFont
-            font.pixelSize: 8
+            font.pixelSize: 9
         }
     }
 
@@ -394,7 +408,7 @@ ShellRoot {
         Accessible.role: Accessible.Button
 
         background: Rectangle {
-            radius: 4
+            radius: 0
             color: !actionButton.enabled ? root.theme.surfaceDeep
                 : actionButton.down ? root.theme.surfaceDown
                 : actionButton.hovered ? root.theme.surfaceHover : root.theme.surfaceDeep
@@ -425,7 +439,7 @@ ShellRoot {
 
         implicitWidth: chipText.implicitWidth + 16
         implicitHeight: 20
-        radius: 3
+        radius: 0
         color: filterChip.active ? root.theme.infoFill : (chipHover.containsMouse ? root.theme.surfaceHover : root.theme.surfaceDeep)
         border.width: 1
         border.color: filterChip.active ? root.theme.info : root.theme.border
@@ -468,7 +482,7 @@ ShellRoot {
         Accessible.role: Accessible.Button
 
         background: Rectangle {
-            radius: 4
+            radius: 0
             color: tabButton.selected ? root.theme.surfaceSelect : tabButton.hovered ? root.theme.surfaceHover : root.theme.surfaceDeep
             border.width: 1
             border.color: tabButton.selected ? root.theme.accent : root.theme.border
@@ -497,7 +511,7 @@ ShellRoot {
 
         implicitWidth: 120
         implicitHeight: 46
-        radius: 4
+        radius: 0
         color: root.theme.bg
         border.width: 1
         border.color: root.theme.border
@@ -544,7 +558,7 @@ ShellRoot {
             anchors.fill: parent
             anchors.leftMargin: 2
             anchors.rightMargin: 2
-            radius: 4
+            radius: 0
             color: unitRow.rowSelected ? root.theme.surfaceSelect : (rowHover.containsMouse ? root.theme.surfaceHover : "transparent")
             border.width: 1
             border.color: unitRow.rowSelected ? root.theme.info : "transparent"
@@ -837,21 +851,44 @@ ShellRoot {
         id: panel
         visible: uiAdapter.open
         screen: Quickshell.screens.length ? Quickshell.screens[0] : null
-        implicitWidth: screen ? screen.width : 1440
-        implicitHeight: screen ? screen.height : 900
+        // Bounded bar drop-down: the surface IS the card's rect below the
+        // bar edge — no scrim, no screen-wide backdrop, nothing painted over
+        // the desktop. Top-only anchors: left/right/bottom anchors force a
+        // full-screen surface (proven on repobar/tokenmaxx). Layer surfaces
+        // are opaque to input, so the transparent barStrip between the bar
+        // and the card carries dismissal; Esc and Close remain. The desktop
+        // outside the surface stays interactive.
+        implicitWidth: root.popupWidth()
+        implicitHeight: root.modalHeight() + root.popupTopMargin
         color: "transparent"
-        // Keep the panel surface transparent, but make the empty area an
-        // outside-click dismiss target. OnDemand avoids stealing keyboard
-        // focus when the popover opens.
         WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
         aboveWindows: true
         exclusionMode: ExclusionMode.Ignore
         anchors {
             top: true
-            bottom: true
-            left: true
-            right: true
         }
+
+        margins {
+            top: root.popupTopMargin
+            left: Math.max(8, Math.min(120, (screen ? screen.width : 1440) / 2 - root.popupWidth() / 2 - 40))
+            right: Math.max(8, (screen ? screen.width : 1440) - root.popupWidth() - Math.max(8, Math.min(120, (screen ? screen.width : 1440) / 2 - root.popupWidth() / 2 - 40)))
+            bottom: 8
+        }
+
+        component BarStrip: Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: root.popupTopMargin
+            color: "transparent"
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.closePanel()
+            }
+        }
+
+        BarStrip {}
 
         Shortcut {
             sequence: "Esc"
@@ -889,37 +926,31 @@ ShellRoot {
             onActivated: root.dispatchFor("restart", root.selectedUnitEntry() ? root.selectedUnitEntry().unit : "")
         }
 
-        Item {
-            anchors.fill: parent
+        Rectangle {
+            id: frameShadow
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: root.popupTopMargin + 5
+            anchors.leftMargin: -3
+            anchors.rightMargin: -3
+            height: root.modalHeight() + 5
+            color: Qt.rgba(0, 0, 0, 0.35)
+            radius: 0
+            visible: modalFrame.visible
+        }
 
-            MouseArea {
-                anchors.fill: parent
-                onClicked: root.closePanel()
-            }
-
-            Rectangle {
-                id: frameShadow
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                anchors.topMargin: root.popupTopMargin + 5
-                width: modalFrame.width
-                height: modalFrame.height
-                color: Qt.rgba(0, 0, 0, 0.35)
-                radius: 10
-                visible: modalFrame.visible
-            }
-
-            Rectangle {
+        Rectangle {
                 id: modalFrame
-                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
                 anchors.topMargin: root.popupTopMargin
-                width: Math.min(root.popupMaxWidth, Math.max(420, panel.width - 48))
                 height: root.modalHeight()
                 color: root.theme.bg
                 border.color: root.theme.borderStrong
                 border.width: 1
-                radius: 10
+                radius: 0
                 // Keep dead space inside the popover interactive without
                 // exposing the backdrop catcher beneath the card.
                 MouseArea {
@@ -1007,7 +1038,7 @@ ShellRoot {
                         color: root.theme.badFill
                         border.color: root.theme.bad
                         border.width: 1
-                        radius: 4
+                        radius: 0
 
                         ColumnLayout {
                             id: alertsColumn
@@ -1160,7 +1191,7 @@ ShellRoot {
                                 color: root.theme.surfaceDeep
                                 border.color: root.theme.border
                                 border.width: 1
-                                radius: 6
+                                radius: 0
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -1227,7 +1258,7 @@ ShellRoot {
                                 color: root.theme.surfaceDeep
                                 border.color: root.theme.border
                                 border.width: 1
-                                radius: 6
+                                radius: 0
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -1369,7 +1400,7 @@ ShellRoot {
                                     color: root.theme.bg
                                     border.color: root.theme.border
                                     border.width: 1
-                                    radius: 3
+                                    radius: 0
                                     clip: true
 
                                     // Overview: the presenter's facts, including the
@@ -1600,7 +1631,6 @@ ShellRoot {
                                     }
                                 }
                             }
-                        }
                         }
                     }
                 }

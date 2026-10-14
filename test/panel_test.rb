@@ -69,7 +69,11 @@ class PanelTest < Minitest::Test
 
   def test_panel_is_a_bar_sized_drop_down_that_never_overlaps_the_screen
     assert_includes panel_source, "property int popupTopMargin: 52"
-    assert_match(/id: modalFrame\s+anchors\.horizontalCenter: parent\.horizontalCenter\s+anchors\.top: parent\.top\s+anchors\.topMargin: root\.popupTopMargin/m, panel_source)
+    assert_match(/id: modalFrame\s+anchors\.top: parent\.top\s+anchors\.left: parent\.left\s+anchors\.right: parent\.right\s+anchors\.topMargin: root\.popupTopMargin/m, panel_source)
+    assert_includes panel_source, "anchors {\n            top: true\n        }"
+    refute_match(/bottom: true/, panel_source, "a bounded drop-down never anchors the bottom")
+    refute_match(/anchors.horizontalCenter: parent.horizontalCenter/, panel_source,
+                 "the bounded surface hangs from the bar; no centered float")
     assert_includes panel_source, "property int popupMaxWidth: 920"
     assert_includes panel_source, "property int popupMaxHeight: 760"
     # Content-fitted: the counted height takes the taller dashboard card and
@@ -80,10 +84,10 @@ class PanelTest < Minitest::Test
     assert_includes panel_source, "Math.min(root.filteredUnits().length, 12) * 60"
     assert_includes panel_source, "Math.min(96, root.alerts.length * 30)"
     assert_includes panel_source, "Math.max(listCardHeight, detailCardHeight)"
-    assert_includes panel_source, "panel.height - root.popupTopMargin - 12"
+    assert_includes panel_source, "(panel.screen ? panel.screen.height : 900) - root.popupTopMargin - 12"
     assert_includes panel_source, "ScrollBar.vertical: ScrollBar {"
     assert_includes panel_source, "policy: ScrollBar.AsNeeded"
-    assert_includes panel_source, "width: Math.min(root.popupMaxWidth, Math.max(420, panel.width - 48))"
+    assert_includes panel_source, "Math.max(420, screenWidth - 48)"
     assert_includes panel_source, "id: frameShadow"
     assert_includes panel_source, "id: dashboardColumns"
     assert_includes panel_source, "id: unitListCard"
@@ -162,8 +166,10 @@ class PanelTest < Minitest::Test
   end
 
   def test_narrow_viewports_show_full_width_list_or_details_without_squeezing_them_side_by_side
-    assert_includes panel_source, "property bool narrowLayout: panel.width < 720"
-    assert_includes panel_source, 'property bool shortViewport: panel.height < 560'
+    assert_match(/function popupWidth\(\)/, panel_source)
+    assert_includes panel_source, "property bool narrowLayout: root.popupWidth() < 720"
+    assert_includes panel_source, "property bool shortViewport: (panel.screen ? panel.screen.height : 900) < 620"
+    assert_match(/component BarStrip: Rectangle/, panel_source, "the bar strip carries dismissal on the bounded surface")
     assert_includes panel_source, 'property string narrowPanelView: "details"'
     assert_match(/id: wideUnitListCard.*?sourceComponent: unitListCardComponent.*?id: wideDetailCard.*?sourceComponent: detailCardComponent/m, panel_source)
     assert_match(/id: narrowPanelStack.*?id: narrowUnitListCard.*?sourceComponent: unitListCardComponent.*?id: narrowDetailCard.*?sourceComponent: detailCardComponent/m, panel_source)
