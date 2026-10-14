@@ -77,6 +77,11 @@ ShellRoot {
     property var alerts: viewData.alerts || []
     property string pendingAction: ""
     property string actionError: ""
+    property var actionQueue: []
+    property var uiActionQueue: []
+    property bool narrowLayout: panel.width < 720
+    property bool shortViewport: panel.height < 560
+    property string narrowPanelView: "details"
 
     // Waybar and QuickShell are separate processes, so the chip cannot provide
     // an anchor item. Keep a generous anchored-to-bar panel rather than
@@ -94,6 +99,10 @@ ShellRoot {
         var desiredHeight = Math.max(root.popupMinHeight, rowsHeight + alertsHeight)
         var availableHeight = Math.max(1, panel.height - root.popupTopMargin - 24)
         return Math.min(root.popupMaxHeight, availableHeight, desiredHeight)
+    }
+
+    function dashboardMinimumHeight() {
+        return Math.max(180, Math.min(360, root.modalHeight() - 260))
     }
 
     readonly property var filterOptions: [
@@ -148,10 +157,12 @@ ShellRoot {
 
     // The selection lives in ui.json (written by the daemon), not in view state,
     // so a row click, the keyboard and the CLI all agree on what is selected.
-    function selectUnit(unit) {
+    function selectUnit(unit, revealDetails) {
         if (!unit) { return }
         root.actionError = ""
-        root.runSwitchyard(["ui", "select", unit.unit])
+        if (root.narrowLayout && revealDetails)
+            root.narrowPanelView = "details"
+        root.runSwitchyard(["ui", "select", unit.unit], "selection")
     }
 
     function selectedUnitName() {
@@ -159,9 +170,10 @@ ShellRoot {
     }
 
     function selectedUnitEntry() {
-        for (var index = 0; index < root.units.length; index++) {
-            if (root.units[index].unit === root.selectedUnitName()) {
-                return root.units[index]
+        var units = root.filteredUnits()
+        for (var index = 0; index < units.length; index++) {
+            if (units[index].unit === root.selectedUnitName()) {
+                return units[index]
             }
         }
         return null
@@ -177,30 +189,29 @@ ShellRoot {
         return -1
     }
 
+    function currentUnitList() {
+        var loader = root.narrowLayout ? narrowUnitListCard : wideUnitListCard
+        return loader.item ? loader.item.listView : null
+    }
+
     function moveSelection(delta) {
         var units = root.filteredUnits()
         if (units.length === 0) { return }
         var current = root.selectedIndex()
         if (current < 0) { current = 0 }
         var next = Math.max(0, Math.min(units.length - 1, current + delta))
-        root.selectUnit(units[next])
-        unitList.positionViewAtIndex(next, ListView.Contain)
-    }
-
-    function firstVisibleUnit() {
-        var units = root.filteredUnits()
-        return units.length > 0 ? units[0] : null
+        root.selectUnit(units[next], true)
+        var list = root.currentUnitList()
+        if (list) { list.positionViewAtIndex(next, ListView.Contain) }
     }
 
     // Auto-select the first unit whenever a selection stops making sense (fresh
     // state, a filter that hides the selection, a unit that disappeared).
     function reconcileSelection() {
-        if (root.units.length === 0) { return }
+        var units = root.filteredUnits()
+        if (units.length === 0) { return }
         if (root.selectedUnitEntry() !== null) { return }
-        var unit = root.firstVisibleUnit()
-        if (unit) {
-            root.runSwitchyard(["ui", "select", unit.unit])
-        }
+        root.selectUnit(units[0])
     }
 
     onUnitsChanged: selectionReconcile.restart()
@@ -218,18 +229,55 @@ ShellRoot {
     }
 
     // Every mutation is a daemon action: the panel never runs systemctl itself.
-    function runSwitchyard(args) {
-        if (actionRunner.running) {
-            actionRunner.signal(9)
-            actionRunner.running = false
+    function runSwitchyard(args, coalesceKey, label) {
+        var nextAction = {
+            args: args,
+            coalesceKey: coalesceKey || "",
+            label: label || ""
         }
-        actionRunner.command = [root.switchyardBin].concat(args).concat(["--config", root.configPath])
+        var isUiAction = args.length > 0 && args[0] === "ui"
+        var queue = isUiAction ? root.uiActionQueue : root.actionQueue
+        if (nextAction.coalesceKey.length > 0) {
+            var remaining = []
+            for (var index = 0; index < queue.length; index++) {
+                if (queue[index].coalesceKey !== nextAction.coalesceKey)
+                    remaining.push(queue[index])
+            }
+            queue = remaining
+        }
+        if (isUiAction) {
+            root.uiActionQueue = queue.concat([nextAction])
+            if (!uiActionRunner.running)
+                root.startNextUiAction()
+            return
+        }
+        root.actionQueue = queue.concat([nextAction])
+        if (nextAction.label.length > 0)
+            root.pendingAction = nextAction.label
+        if (!actionRunner.running)
+            root.startNextAction()
+    }
+
+    function startNextAction() {
+        if (actionRunner.running || root.actionQueue.length === 0) { return }
+        var nextAction = root.actionQueue[0]
+        root.actionQueue = root.actionQueue.slice(1)
+        root.pendingAction = nextAction.label
+        actionRunner.command = [root.switchyardBin].concat(nextAction.args).concat(["--config", root.configPath])
         actionRunner.running = true
+    }
+
+    function startNextUiAction() {
+        if (uiActionRunner.running || root.uiActionQueue.length === 0) { return }
+        var nextAction = root.uiActionQueue[0]
+        root.uiActionQueue = root.uiActionQueue.slice(1)
+        uiActionRunner.command = [root.switchyardBin].concat(nextAction.args).concat(["--config", root.configPath])
+        uiActionRunner.running = true
     }
 
     function refresh() {
         root.pendingAction = "Scanning…"
-        root.runSwitchyard(["refresh"])
+        root.runSwitchyard(["refresh"], "refresh", "Scanning…")
     }
 
     function closePanel() {
@@ -240,19 +288,21 @@ ShellRoot {
         if (!unit) { return }
         root.pendingAction = action + " " + unit
         root.actionError = ""
-        root.runSwitchyard([action, unit])
+        root.runSwitchyard([action, unit], "", root.pendingAction)
     }
 
     function toggleEnabled(unit) {
         if (!unit) { return }
-        root.pendingAction = (unit.enabled ? "disabling " : "enabling ") + unit
+        var action = unit.enabled ? "disable" : "enable"
+        var target = unit.unit
+        root.pendingAction = action + " " + target
         root.actionError = ""
-        root.runSwitchyard([unit.enabled ? "disable" : "enable", unit])
+        root.runSwitchyard([action, target], "", root.pendingAction)
     }
 
     function openUnit(unit) {
         if (!unit || !unit.url) { return }
-        root.runSwitchyard(["open", unit.url])
+        root.runSwitchyard(["open", unit.url], "", "Opening " + unit.unit)
     }
 
     function reloadState() {
@@ -489,7 +539,7 @@ ShellRoot {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.selectUnit(unitRow.rowData)
+            onClicked: root.selectUnit(unitRow.rowData, true)
             onDoubleClicked: root.openUnit(unitRow.rowData)
         }
 
@@ -744,6 +794,24 @@ ShellRoot {
             if (exitCode !== 0) {
                 root.actionError = actionRunnerError.text.trim() || ("command failed with exit code " + exitCode)
             }
+            if (root.actionQueue.length === 0)
+                root.pendingAction = ""
+            else
+                Qt.callLater(root.startNextAction)
+        }
+    }
+
+    Process {
+        id: uiActionRunner
+        running: false
+        stdout: StdioCollector {}
+        stderr: StdioCollector { id: uiActionRunnerError }
+        onExited: (exitCode, exitStatus) => {
+            if (exitCode !== 0) {
+                root.actionError = uiActionRunnerError.text.trim() || ("command failed with exit code " + exitCode)
+            }
+            if (root.uiActionQueue.length > 0)
+                Qt.callLater(root.startNextUiAction)
         }
     }
 
@@ -835,8 +903,8 @@ ShellRoot {
                 ColumnLayout {
                     id: modalContent
                     anchors.fill: parent
-                    anchors.margins: 14
-                    spacing: 10
+                    anchors.margins: root.shortViewport ? 10 : 14
+                    spacing: root.shortViewport ? 8 : 10
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -850,11 +918,12 @@ ShellRoot {
                                 text: "Switchyard"
                                 color: root.theme.text
                                 font.family: root.textFont
-                                font.pixelSize: 22
+                                font.pixelSize: root.shortViewport ? 20 : 22
                                 font.bold: true
                             }
                             Text {
                                 Layout.fillWidth: true
+                                visible: !root.shortViewport || !root.narrowLayout || root.narrowPanelView === "units"
                                 text: root.summaryLine()
                                 color: root.theme.goodSoft
                                 font.family: root.textFont
@@ -868,7 +937,7 @@ ShellRoot {
                                 color: root.actionError.length > 0 ? root.theme.bad : root.theme.textMuted
                                 font.family: root.textFont
                                 font.pixelSize: 10
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
                         }
 
@@ -913,21 +982,22 @@ ShellRoot {
                         }
                     }
 
-                    RowLayout {
+                    Flow {
+                        id: filterFlow
                         Layout.fillWidth: true
+                        visible: !root.narrowLayout || root.narrowPanelView === "units" || !root.shortViewport
                         spacing: 8
 
                         TextField {
                             id: unitFilterInput
-                            Layout.fillWidth: true
-                            Layout.maximumWidth: 320
+                            width: Math.min(320, Math.max(120, filterFlow.width * 0.48))
                             placeholderText: "filter units"
                             font.family: root.textFont
-                            onTextEdited: root.runSwitchyard(["ui", "filter-query", text])
+                            onTextEdited: root.runSwitchyard(["ui", "filter-query", text], "filter-query")
                             Keys.onEscapePressed: {
                                 if (unitFilterInput.text.length > 0) {
                                     unitFilterInput.text = ""
-                                    root.runSwitchyard(["ui", "filter-query", ""])
+                                    root.runSwitchyard(["ui", "filter-query", ""], "filter-query")
                                 } else {
                                     root.closePanel()
                                 }
@@ -941,13 +1011,10 @@ ShellRoot {
                                 filterKey: modelData.key
                                 label: modelData.label
                                 active: uiAdapter.filter === modelData.key
-                                onPicked: root.runSwitchyard(["ui", "filter", modelData.key])
+                                onPicked: root.runSwitchyard(["ui", "filter", modelData.key], "filter")
                             }
                         }
 
-                        Item {
-                            Layout.fillWidth: true
-                        }
 
                         Text {
                             text: root.filteredUnits().length + " shown"
@@ -957,23 +1024,94 @@ ShellRoot {
                         }
                     }
 
-                    RowLayout {
+                    Item {
                         id: dashboardColumns
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        Layout.minimumHeight: 360
-                        spacing: 10
+                        Layout.minimumHeight: root.dashboardMinimumHeight()
 
-                        Rectangle {
-                            id: unitListCard
-                            Layout.preferredWidth: Math.min(420, Math.max(350, dashboardColumns.width * 0.44))
-                            Layout.minimumWidth: 350
-                            Layout.fillHeight: true
-                            Layout.minimumHeight: 360
-                            color: root.theme.surfaceDeep
-                            border.color: root.theme.border
-                            border.width: 1
-                            radius: 4
+                        RowLayout {
+                            id: wideDashboard
+                            anchors.fill: parent
+                            visible: !root.narrowLayout
+                            spacing: 10
+
+                            Loader {
+                                id: wideUnitListCard
+                                Layout.preferredWidth: Math.min(420, Math.max(180, dashboardColumns.width * 0.44))
+                                Layout.minimumWidth: Math.min(180, dashboardColumns.width * 0.4)
+                                Layout.fillHeight: true
+                                active: !root.narrowLayout
+                                sourceComponent: unitListCardComponent
+                            }
+                            Loader {
+                                id: wideDetailCard
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                active: !root.narrowLayout
+                                sourceComponent: detailCardComponent
+                            }
+                        }
+
+                        ColumnLayout {
+                            id: narrowDashboard
+                            anchors.fill: parent
+                            visible: root.narrowLayout
+                            spacing: 8
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                DetailTab {
+                                    label: "Environments"
+                                    selected: root.narrowPanelView === "units"
+                                    onPicked: root.narrowPanelView = "units"
+                                }
+                                DetailTab {
+                                    label: "Selected service"
+                                    selected: root.narrowPanelView === "details"
+                                    enabled: root.selectedUnitEntry() !== null
+                                    onPicked: root.narrowPanelView = "details"
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+
+                            StackLayout {
+                                id: narrowPanelStack
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.minimumHeight: 0
+                                currentIndex: root.narrowPanelView === "units" ? 0 : 1
+
+                                Loader {
+                                    id: narrowUnitListCard
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    active: root.narrowLayout
+                                    sourceComponent: unitListCardComponent
+                                }
+                                Loader {
+                                    id: narrowDetailCard
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    active: root.narrowLayout
+                                    sourceComponent: detailCardComponent
+                                }
+                            }
+                        }
+
+                        Component {
+                            id: unitListCardComponent
+
+                            Rectangle {
+                                id: unitListCard
+                                property alias listView: unitList
+                                anchors.fill: parent
+                                color: root.theme.surfaceDeep
+                                border.color: root.theme.border
+                                border.width: 1
+                                radius: 4
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -993,7 +1131,7 @@ ShellRoot {
                                     }
                                     Item { Layout.fillWidth: true }
                                     Text {
-                                        text: root.filteredUnits().length + " visible"
+                                        text: root.filteredUnits().length + " visible" + (unitList.contentHeight > unitList.height ? " · scroll" : "")
                                         color: root.theme.textMuted
                                         font.family: root.textFont
                                         font.pixelSize: 10
@@ -1010,6 +1148,7 @@ ShellRoot {
                                     spacing: 2
                                     model: root.filteredUnits()
                                     boundsBehavior: Flickable.StopAtBounds
+                                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                                     delegate: UnitRow {
                                         width: unitList.width
@@ -1028,22 +1167,23 @@ ShellRoot {
                                 }
                             }
                         }
+                        }
 
-                        Rectangle {
-                            id: detailCard
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.minimumWidth: 0
-                            Layout.minimumHeight: 360
-                            color: root.theme.surfaceDeep
-                            border.color: root.theme.border
-                            border.width: 1
-                            radius: 4
+                        Component {
+                            id: detailCardComponent
+
+                            Rectangle {
+                                id: detailCard
+                                anchors.fill: parent
+                                color: root.theme.surfaceDeep
+                                border.color: root.theme.border
+                                border.width: 1
+                                radius: 4
 
                             ColumnLayout {
                                 anchors.fill: parent
-                                anchors.margins: 12
-                                spacing: 10
+                                anchors.margins: root.shortViewport ? 8 : 12
+                                spacing: root.shortViewport ? 6 : 10
 
                                 Text {
                                     Layout.fillWidth: true
@@ -1057,7 +1197,7 @@ ShellRoot {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    visible: root.selectedUnitEntry() !== null
+                                    visible: root.selectedUnitEntry() !== null && !root.shortViewport
                                     text: root.selectedUnitEntry() ? (root.selectedUnitEntry().description || "") : ""
                                     color: root.theme.textMuted
                                     font.family: root.textFont
@@ -1096,7 +1236,7 @@ ShellRoot {
                                     }
                                 }
 
-                                RowLayout {
+                                Flow {
                                     Layout.fillWidth: true
                                     spacing: 6
                                     visible: root.selectedUnitEntry() !== null
@@ -1115,6 +1255,13 @@ ShellRoot {
                                         tooltip: "Restart the unit (use this after the crash-loop is fixed)"
                                         enabled: root.selectedUnitEntry() !== null
                                         onClicked: root.dispatchFor("restart", root.selectedUnitEntry() ? root.selectedUnitEntry().unit : "")
+                                    }
+                                    ActionButton {
+                                        label: "Reload"
+                                        tone: "info"
+                                        tooltip: "Ask systemd to reload this unit's configuration; not all units support reload"
+                                        enabled: root.selectedUnitEntry() !== null
+                                        onClicked: root.dispatchFor("reload", root.selectedUnitEntry() ? root.selectedUnitEntry().unit : "")
                                     }
                                     ActionButton {
                                         label: root.selectedUnitEntry() && root.selectedUnitEntry().enabled ? "Disable" : "Enable"
@@ -1155,9 +1302,9 @@ ShellRoot {
                                             tabKey: modelData.key
                                             selected: uiAdapter.detailTab === modelData.key
                                             onPicked: {
-                                                root.runSwitchyard(["ui", "tab", modelData.key])
+                                                root.runSwitchyard(["ui", "tab", modelData.key], "detail-tab")
                                                 if (modelData.key === "logs" && root.selectedUnitEntry())
-                                                    root.runSwitchyard(["logs", root.selectedUnitEntry().unit])
+                                                    root.runSwitchyard(["logs", root.selectedUnitEntry().unit], "logs")
                                             }
                                         }
                                     }
@@ -1404,6 +1551,7 @@ ShellRoot {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                 }

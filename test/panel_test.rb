@@ -99,7 +99,7 @@ class PanelTest < Minitest::Test
 
   def test_panel_keeps_service_list_and_details_side_by_side
     assert_includes panel_source, 'text: root.summaryLine()'
-    assert_match(/RowLayout\s*\{\s*id: dashboardColumns.*?id: unitListCard.*?id: detailCard/m, panel_source)
+    assert_match(/Item\s*\{\s*id: dashboardColumns.*?id: wideDashboard.*?id: unitListCard.*?id: detailCard/m, panel_source)
     assert_includes panel_source, 'text: "Environments"'
     %w[STATE LISTENER HEALTH].each do |label|
       assert_includes panel_source, "label: \"#{label}\"", "Missing #{label} summary tile"
@@ -110,5 +110,62 @@ class PanelTest < Minitest::Test
     %w[Start Restart Enable Reset\ failed Open Overview Unit Logs].each do |label|
       assert_includes panel_source, label
     end
+  end
+
+  def test_detail_selection_tracks_the_active_filter
+    selected_entry = panel_source[/function selectedUnitEntry\(\).*?\n    \}/m]
+    reconcile = panel_source[/function reconcileSelection\(\).*?\n    \}/m]
+
+    assert_includes selected_entry, "root.filteredUnits()"
+    assert_includes reconcile, "root.filteredUnits()"
+    assert_includes reconcile, "root.selectUnit(units[0])"
+  end
+
+  def test_cli_actions_queue_without_cancelling_in_flight_commands
+    assert_includes panel_source, "property var actionQueue: []"
+    assert_includes panel_source, "property var uiActionQueue: []"
+    assert_includes panel_source, "id: uiActionRunner"
+    assert_includes panel_source, "function startNextAction()"
+    assert_includes panel_source, "function startNextUiAction()"
+    assert_includes panel_source, "root.actionQueue = queue.concat([nextAction])"
+    assert_includes panel_source, "root.uiActionQueue = queue.concat([nextAction])"
+    assert_includes panel_source, "root.startNextAction()"
+    refute_includes panel_source, "actionRunner.signal(9)"
+    assert_includes panel_source, 'root.runSwitchyard(["ui", "filter-query", text], "filter-query")'
+    toggle_enabled = panel_source[/function toggleEnabled\(unit\).*?\n    \}/m]
+    assert_includes toggle_enabled, "var target = unit.unit"
+    assert_includes toggle_enabled, 'root.runSwitchyard([action, target], "", root.pendingAction)'
+  end
+
+  def test_reload_remains_available_for_the_selected_unit
+    assert_match(/label: "Reload".*?root\.dispatchFor\("reload"/m, panel_source)
+  end
+
+  def test_narrow_panels_wrap_controls_and_keep_list_overflow_visible
+    assert_match(/Flow\s*\{.*?id: unitFilterInput/m, panel_source)
+    assert_match(/Flow\s*\{.*?label: "Reload"/m, panel_source)
+    assert_includes panel_source, "function dashboardMinimumHeight()"
+    assert_match(/id: unitList.*?ScrollBar\.vertical: ScrollBar \{ policy: ScrollBar\.AsNeeded \}/m, panel_source)
+  end
+
+  def test_narrow_viewports_show_full_width_list_or_details_without_squeezing_them_side_by_side
+    assert_includes panel_source, "property bool narrowLayout: panel.width < 720"
+    assert_includes panel_source, 'property bool shortViewport: panel.height < 560'
+    assert_includes panel_source, 'property string narrowPanelView: "details"'
+    assert_match(/id: wideUnitListCard.*?sourceComponent: unitListCardComponent.*?id: wideDetailCard.*?sourceComponent: detailCardComponent/m, panel_source)
+    assert_match(/id: narrowPanelStack.*?id: narrowUnitListCard.*?sourceComponent: unitListCardComponent.*?id: narrowDetailCard.*?sourceComponent: detailCardComponent/m, panel_source)
+    assert_includes panel_source, 'visible: !root.narrowLayout || root.narrowPanelView === "units" || !root.shortViewport'
+    assert_includes panel_source, 'anchors.margins: root.shortViewport ? 8 : 12'
+    assert_includes panel_source, 'spacing: root.shortViewport ? 6 : 10'
+    assert_includes panel_source, 'label: "Environments"'
+    assert_includes panel_source, 'label: "Selected service"'
+    assert_includes panel_source, 'root.narrowPanelView = "details"'
+    assert_includes panel_source, 'root.narrowPanelView = "units"'
+    assert_includes panel_source, "function currentUnitList()"
+  end
+
+  def test_service_list_shows_a_scroll_cue_when_rows_overflow
+    assert_includes panel_source, 'unitList.contentHeight > unitList.height ? " · scroll" : ""'
+    assert_includes panel_source, "ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }"
   end
 end
