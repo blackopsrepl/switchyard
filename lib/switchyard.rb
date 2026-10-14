@@ -16,5 +16,5 @@ require_relative "switchyard/runtime/waybar"
 require_relative "switchyard/cli"
 
 module Switchyard
-  VERSION = "0.3.0"
+  VERSION = "0.4.0"
 end
