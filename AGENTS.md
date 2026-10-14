@@ -110,8 +110,10 @@
   `width`. A name bound to `descriptionText.width` while the description is bound
   to `nameText.width` is a cycle that resolves in whichever order QML picks, and
   it let a four-character description fragment render.
-- The modal height comes from `root.modalHeight()`. Deriving it from implicit
-  heights collapses the frame: a `ListView` and a `fillHeight` pane both report a
+- The height comes from `root.modalHeight()`, counted from laid-out parts and
+  capped between the bar edge and the screen; the surface is a bounded bar
+  drop-down, never a screen overlay. Deriving height from implicit heights
+  collapses the frame: a `ListView` and a `fillHeight` pane both report a
   near-zero implicit height.
 - A description that only fits as `"So…"` is hidden rather than shown. The unit
   name is the row's subject and gets the space.
