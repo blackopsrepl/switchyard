@@ -89,14 +89,36 @@ class StoreTest < Minitest::Test
   def test_scan_lock_is_reentrant_within_a_process_but_serializes_work
     path = write_test_config
     order = []
-    thread = Thread.new do
-      Switchyard::Runtime::Store.scan_effect(path)
-      order << :scanner
+    mutex = Mutex.new
+    started = ConditionVariable.new
+    scanner_done = false
+    thread = nil
+
+    # Start the scanner only while the lock is held. :started is appended before
+    # the scanner reaches the lock, so the holder then has a bounded window to
+    # observe that a excluded scan cannot complete: a lock that fails to exclude
+    # lets the scan finish under the holder and fails loudly here, while the
+    # real flock cannot. The original form raced :holder against thread start-up
+    # and flaked in CI.
+    Switchyard::Runtime::State.with_scan_lock(Switchyard::Core::Config.load_config(path)) do
+      order << :holder
+      thread = Thread.new do
+        mutex.synchronize do
+          order << :started
+          started.signal
+        end
+        Switchyard::Runtime::Store.scan_effect(path)
+        mutex.synchronize do
+          order << :scanner
+          scanner_done = true
+        end
+      end
+      mutex.synchronize { started.wait(mutex, 5) }
+      refute mutex.synchronize { scanner_done }, "the scan completed while the scan lock was still held"
     end
-    Switchyard::Runtime::State.with_scan_lock(Switchyard::Core::Config.load_config(path)) { order << :holder }
     thread.join
 
-    assert_equal %i[holder scanner], order
+    assert_equal %i[holder started scanner], order
   end
 
   # The chip is a cached renderer with its own poll interval, so without this the
