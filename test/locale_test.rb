@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "open3"
+require "rbconfig"
 
 # The daemon runs as a systemd --user service, which inherits no locale. Under a
 # C/POSIX locale Ruby tags file content US-ASCII, and JSON's C parser then raises
@@ -22,7 +23,7 @@ class LocaleTest < Minitest::Test
   end
 
   def run_cli(env, *argv)
-    Open3.capture3(env, "/usr/bin/ruby", BIN, *argv)
+    Open3.capture3(env, RbConfig.ruby, BIN, *argv)
   end
 
   # The config is written in-process with an explicit state dir so the test never
