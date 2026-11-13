@@ -5,12 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_CONFIG="$(mktemp -t switchyard-release-check-XXXXXX.json)"
 TMP_STATE="$(mktemp -d -t switchyard-release-check-state-XXXXXX)"
 TMP_HARNESS="$(mktemp -d -t switchyard-release-check-harness-XXXXXX)"
-SWAY_PID=""
-QS_PID=""
+LUMEN_SESSION="switchyard-release-check"
+LUMEN_STARTED=""
 
 cleanup() {
-  [ -n "$QS_PID" ] && kill "$QS_PID" 2>/dev/null || true
-  [ -n "$SWAY_PID" ] && kill "$SWAY_PID" 2>/dev/null || true
+  [ -n "$LUMEN_STARTED" ] && lumen-cli stop "$LUMEN_SESSION" >/dev/null 2>&1 || true
   if [ -f "$TMP_STATE/daemon.lock" ]; then
     pid="$(cat "$TMP_STATE/daemon.lock" 2>/dev/null || true)"
     [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null || true
@@ -132,48 +131,48 @@ run_step "detection is explainable" ruby -rjson -e '
   puts "signals present on all #{view.dig("summary", "total")} units"
 ' "$TMP_STATE/snapshot.json"
 
-# Off-desktop panel load: a private headless Sway on its own runtime dir, so the
-# operator's live session is never touched.
-if command -v quickshell >/dev/null 2>&1 && command -v sway >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
-  echo
-  echo "==> quickshell load (private headless sway)"
-  mkdir -p "$TMP_HARNESS/run" "$TMP_HARNESS/state"
-  chmod 700 "$TMP_HARNESS/run"
-  cp "$TMP_STATE"/*.json "$TMP_HARNESS/state/" 2>/dev/null || true
-  ruby -rjson -e '
-    path = ARGV.fetch(0)
-    ui = JSON.parse(File.read(path))
-    ui["open"] = true
-    File.write(path, "#{JSON.pretty_generate(ui)}\n")
-  ' "$TMP_HARNESS/state/ui.json"
-  printf 'output HEADLESS-1 resolution 1440x900\n' > "$TMP_HARNESS/sway.conf"
-
-  XDG_RUNTIME_DIR="$TMP_HARNESS/run" WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
-    sway -c "$TMP_HARNESS/sway.conf" >"$TMP_HARNESS/sway.log" 2>&1 &
-  SWAY_PID=$!
-  sleep 2
-
-  XDG_RUNTIME_DIR="$TMP_HARNESS/run" WAYLAND_DISPLAY=wayland-1 \
-    SWITCHYARD_CONFIG="$TMP_CONFIG" SWITCHYARD_STATE_DIR="$TMP_HARNESS/state" \
-    SWITCHYARD_BIN="$ROOT_DIR/bin/switchyard" QT_QPA_PLATFORM=wayland QS_NO_RELOAD_POPUP=1 \
-    quickshell --path "$ROOT_DIR/frontend/quickshell/shell.qml" >"$TMP_HARNESS/qs.log" 2>&1 &
-  QS_PID=$!
-  sleep 4
-
-  if grep -qE '^\s*ERROR|Failed to load configuration' "$TMP_HARNESS/qs.log"; then
-    echo "panel failed to load:" >&2
-    cat "$TMP_HARNESS/qs.log" >&2
-    exit 1
-  fi
-  grep -q "Configuration Loaded" "$TMP_HARNESS/qs.log" || { echo "panel never reported Configuration Loaded" >&2; cat "$TMP_HARNESS/qs.log" >&2; exit 1; }
-
-  XDG_RUNTIME_DIR="$TMP_HARNESS/run" WAYLAND_DISPLAY=wayland-1 grim "$TMP_HARNESS/panel.png"
-  test -s "$TMP_HARNESS/panel.png" || { echo "panel screenshot is empty" >&2; exit 1; }
-  echo "panel rendered $(stat -c %s "$TMP_HARNESS/panel.png") bytes at 1440x900"
-else
-  echo
-  echo "==> quickshell load skipped (needs quickshell, sway and grim)"
+# Off-desktop panel render: the panel runs as a Lumen session on a copied state
+# dir, so the operator's live session is never touched and the render is the one
+# the operator can watch in the Lumen viewer.
+if ! command -v lumen-cli >/dev/null 2>&1 || ! command -v quickshell >/dev/null 2>&1; then
+  echo "release-check needs lumen-cli and quickshell for the panel render" >&2
+  exit 1
 fi
+echo
+echo "==> quickshell render (lumen session $LUMEN_SESSION)"
+mkdir -p "$TMP_HARNESS/state"
+cp "$TMP_STATE"/*.json "$TMP_HARNESS/state/" 2>/dev/null || true
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  ui = JSON.parse(File.read(path))
+  ui["open"] = true
+  File.write(path, "#{JSON.pretty_generate(ui)}\n")
+' "$TMP_HARNESS/state/ui.json"
+
+lumen-cli stop "$LUMEN_SESSION" >/dev/null 2>&1 || true
+lumen-cli ensure "$LUMEN_SESSION" "/usr/bin/env SWITCHYARD_CONFIG=$TMP_CONFIG SWITCHYARD_STATE_DIR=$TMP_HARNESS/state SWITCHYARD_BIN=$ROOT_DIR/bin/switchyard QS_NO_RELOAD_POPUP=1 $(command -v quickshell) -p $ROOT_DIR/frontend/quickshell/shell.qml" --owner release-check >/dev/null
+LUMEN_STARTED=1
+
+SESSION_LOG="${XDG_DATA_HOME:-$HOME/.local/share}/lumen/lumen-daemon/run/$LUMEN_SESSION/session.log"
+for _ in $(seq 1 40); do
+  grep -qE 'Configuration Loaded|Failed to load configuration' "$SESSION_LOG" 2>/dev/null && break
+  sleep 0.25
+done
+if grep -qE '^\s*ERROR|Failed to load configuration' "$SESSION_LOG" 2>/dev/null; then
+  echo "panel failed to load:" >&2
+  cat "$SESSION_LOG" >&2
+  exit 1
+fi
+grep -q "Configuration Loaded" "$SESSION_LOG" 2>/dev/null || { echo "panel never reported Configuration Loaded" >&2; cat "$SESSION_LOG" >&2 2>/dev/null; exit 1; }
+
+# The panel maps a moment after it loads; frame exits non-zero until it has.
+for _ in $(seq 1 40); do
+  lumen-cli frame "$LUMEN_SESSION" "$TMP_HARNESS/panel.png" >/dev/null 2>&1 && break
+  sleep 0.25
+done
+lumen-cli frame "$LUMEN_SESSION" "$TMP_HARNESS/panel.png" >"$TMP_HARNESS/frame.json"
+test -s "$TMP_HARNESS/panel.png" || { echo "panel frame is empty" >&2; exit 1; }
+echo "panel rendered $(ruby -rjson -e 'f = JSON.parse(File.read(ARGV[0])); print "#{f["width"]}x#{f["height"]}"' "$TMP_HARNESS/frame.json") in lumen"
 
 echo
 echo "release-check passed"

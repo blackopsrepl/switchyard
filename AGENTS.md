@@ -4,7 +4,7 @@
 
 - `bin/switchyard`: Ruby CLI entrypoint.
 - `bin/release-check`: local release gate (syntax, tests, QML lint, CLI smoke,
-  and a private headless-Sway panel render).
+  and a panel render in a Lumen session).
 - `lib/switchyard/core`: config, systemctl access, Rails-environment detection,
   port discovery, HTTP probe, formatting, process helpers.
 - `lib/switchyard/runtime`: daemon, store, cached state files, presenter,
@@ -142,10 +142,11 @@
 - Runtime state lives at `~/.local/state/switchyard/`.
 - The daemon is a `systemd --user` service; the units it manages are system units.
   It installs no system unit of its own.
-- Verifying the panel: run a private headless Sway (`WLR_BACKENDS=headless`, its
-  own `XDG_RUNTIME_DIR`), launch QuickShell against a copied state dir with
-  `QT_QPA_PLATFORM=wayland`, and screenshot with `grim`. Never drive the live
-  session.
+- Verifying the panel: run it as a Lumen session against a copied state dir
+  (`lumen-cli ensure <name> "/usr/bin/env SWITCHYARD_STATE_DIR=… quickshell -p …"`)
+  and read the render with `lumen-cli frame <name> <out.png>`. Never drive the
+  live session, and never stand up a private compositor: the operator watches
+  Lumen.
 - QuickShell hot-reloads on file change and **keeps rendering the last good
   config** when a reload fails, so a screenshot can silently show stale output.
   Always grep the QuickShell log for `Failed to load configuration` before
@@ -154,6 +155,6 @@
   (`fuser ~/.local/state/switchyard/daemon.lock`). A leftover daemon from a manual
   run holds the lock and makes the service exit-loop with "daemon already
   running", which looks like a service bug and is not one.
-- `bin/release-check` leaves its own headless Sway and QuickShell running on the
-  success path. Kill the harness pids it created rather than assuming it cleaned
-  up.
+- `bin/release-check` stops its Lumen session (`switchyard-release-check`) on
+  every exit path; a session still listed in `lumen-cli status` means the gate
+  was killed mid-run.

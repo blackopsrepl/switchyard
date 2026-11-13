@@ -43,9 +43,10 @@ exists where Quickshell is installed). Load it off-desktop instead:
 
 ```sh
 make check          # syntax, tests (panel contract), config validation
-bin/release-check   # full gate, includes a private headless-sway panel render
+bin/release-check   # full gate, includes a panel render in a Lumen session
 ```
 
-The release gate starts its own headless Sway with a private `XDG_RUNTIME_DIR`,
-loads the panel against a copied state dir, greps the QuickShell log for load
-errors, and screenshots the result with `grim`. Never drive the live session.
+The release gate runs the panel as a Lumen session against a copied state dir,
+greps the session log for load errors, and reads the render with
+`lumen-cli frame`. Never drive the live session, and never stand up a private
+compositor.
